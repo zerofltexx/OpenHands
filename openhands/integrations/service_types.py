@@ -21,6 +21,7 @@ class ProviderType(Enum):
     GITHUB = 'github'
     GITLAB = 'gitlab'
     BITBUCKET = 'bitbucket'
+    AZURE_DEVOPS = 'azure_devops'
     ENTERPRISE_SSO = 'enterprise_sso'
 
 
@@ -74,6 +75,16 @@ class SuggestedTask(BaseModel):
                 'tokenEnvVar': 'BITBUCKET_TOKEN',
                 'ciSystem': 'Bitbucket Pipelines',
                 'ciProvider': 'Bitbucket',
+                'requestVerb': 'pull request',
+            }
+        elif self.git_provider == ProviderType.AZURE_DEVOPS:
+            return {
+                'requestType': 'Pull Request',
+                'requestTypeShort': 'PR',
+                'apiName': 'Azure DevOps API',
+                'tokenEnvVar': 'AZURE_DEVOPS_TOKEN',
+                'ciSystem': 'Azure Pipelines',
+                'ciProvider': 'Azure DevOps',
                 'requestVerb': 'pull request',
             }
 
