@@ -83,9 +83,35 @@ VSCode Extension:
   - Use `vscode.window.createOutputChannel()` for debug logging instead of `showErrorMessage()` popups
   - Pre-commit process runs both frontend and backend checks when committing extension changes
 
-## Template for Github Pull Request
+## Pull Request Templates
 
-If you are starting a pull request (PR), please follow the template in `.github/pull_request_template.md`.
+### GitHub Pull Request Template
+
+If you are starting a pull request (PR) on GitHub, please follow the template in `.github/pull_request_template.md`.
+
+### Azure DevOps Pull Request Template
+
+If you are starting a pull request in Azure DevOps, please include the following information:
+
+```markdown
+## Description
+[Provide a brief description of the changes made in this PR]
+
+## Related Work Items
+[Link to related work items using #ID format, e.g., Fixes #123]
+
+## Testing
+[Describe the testing performed to verify the changes]
+
+## Checklist
+- [ ] Code builds clean without any errors or warnings
+- [ ] Tests have been added/updated and all tests pass
+- [ ] Documentation has been updated if necessary
+- [ ] Pre-commit hooks have been run successfully
+
+## Additional Notes
+[Any additional information that might be helpful for reviewers]
+```
 
 ## Implementation Details
 

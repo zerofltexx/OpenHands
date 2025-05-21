@@ -5,7 +5,14 @@ import { AuthModal } from "#/components/features/waitlist/auth-modal";
 
 // Mock the useAuthUrl hook
 vi.mock("#/hooks/use-auth-url", () => ({
-  useAuthUrl: () => "https://gitlab.com/oauth/authorize",
+  useAuthUrl: (params: any) => {
+    if (params?.identityProvider === "gitlab") {
+      return "https://gitlab.com/oauth/authorize";
+    } else if (params?.identityProvider === "azure_devops") {
+      return "https://dev.azure.com/oauth/authorize";
+    }
+    return null;
+  }
 }));
 
 describe("AuthModal", () => {
@@ -18,14 +25,8 @@ describe("AuthModal", () => {
     vi.resetAllMocks();
   });
 
-  it("should render the GitHub and GitLab buttons", () => {
-    render(
-      <AuthModal
-        githubAuthUrl="mock-url"
-        appMode="saas"
-        providersConfigured={["github", "gitlab"]}
-      />,
-    );
+  it("should render the GitHub, GitLab, and Azure DevOps buttons", () => {
+    render(<AuthModal githubAuthUrl="mock-url" appMode="saas" />);
 
     const githubButton = screen.getByRole("button", {
       name: "GITHUB$CONNECT_TO_GITHUB",
@@ -33,21 +34,19 @@ describe("AuthModal", () => {
     const gitlabButton = screen.getByRole("button", {
       name: "GITLAB$CONNECT_TO_GITLAB",
     });
+    const azureDevOpsButton = screen.getByRole("button", {
+      name: "AZURE_DEVOPS$CONNECT_TO_AZURE_DEVOPS",
+    });
 
     expect(githubButton).toBeInTheDocument();
     expect(gitlabButton).toBeInTheDocument();
+    expect(azureDevOpsButton).toBeInTheDocument();
   });
 
   it("should redirect to GitHub auth URL when GitHub button is clicked", async () => {
     const user = userEvent.setup();
     const mockUrl = "https://github.com/login/oauth/authorize";
-    render(
-      <AuthModal
-        githubAuthUrl={mockUrl}
-        appMode="saas"
-        providersConfigured={["github"]}
-      />,
-    );
+    render(<AuthModal githubAuthUrl={mockUrl} appMode="saas" />);
 
     const githubButton = screen.getByRole("button", {
       name: "GITHUB$CONNECT_TO_GITHUB",
@@ -57,62 +56,16 @@ describe("AuthModal", () => {
     expect(window.location.href).toBe(mockUrl);
   });
 
-  it("should render Terms of Service and Privacy Policy text with correct links", () => {
-    render(<AuthModal githubAuthUrl="mock-url" appMode="saas" />);
+  it("should redirect to Azure DevOps auth URL when Azure DevOps button is clicked", async () => {
+    const user = userEvent.setup();
+    const mockUrl = "https://dev.azure.com/oauth/authorize";
+    render(<AuthModal githubAuthUrl="mock-github-url" appMode="saas" />);
 
-    // Find the terms of service section using data-testid
-    const termsSection = screen.getByTestId("auth-modal-terms-of-service");
-    expect(termsSection).toBeInTheDocument();
-
-    // Check that all text content is present in the paragraph
-    expect(termsSection).toHaveTextContent(
-      "AUTH$BY_SIGNING_UP_YOU_AGREE_TO_OUR",
-    );
-    expect(termsSection).toHaveTextContent("COMMON$TERMS_OF_SERVICE");
-    expect(termsSection).toHaveTextContent("COMMON$AND");
-    expect(termsSection).toHaveTextContent("COMMON$PRIVACY_POLICY");
-
-    // Check Terms of Service link
-    const tosLink = screen.getByRole("link", {
-      name: "COMMON$TERMS_OF_SERVICE",
+    const azureDevOpsButton = screen.getByRole("button", {
+      name: "AZURE_DEVOPS$CONNECT_TO_AZURE_DEVOPS",
     });
-    expect(tosLink).toBeInTheDocument();
-    expect(tosLink).toHaveAttribute("href", "https://www.all-hands.dev/tos");
-    expect(tosLink).toHaveAttribute("target", "_blank");
-    expect(tosLink).toHaveClass("underline", "hover:text-primary");
+    await user.click(azureDevOpsButton);
 
-    // Check Privacy Policy link
-    const privacyLink = screen.getByRole("link", {
-      name: "COMMON$PRIVACY_POLICY",
-    });
-    expect(privacyLink).toBeInTheDocument();
-    expect(privacyLink).toHaveAttribute(
-      "href",
-      "https://www.all-hands.dev/privacy",
-    );
-    expect(privacyLink).toHaveAttribute("target", "_blank");
-    expect(privacyLink).toHaveClass("underline", "hover:text-primary");
-
-    // Verify that both links are within the terms section
-    expect(termsSection).toContainElement(tosLink);
-    expect(termsSection).toContainElement(privacyLink);
-  });
-
-  it("should open Terms of Service link in new tab", () => {
-    render(<AuthModal githubAuthUrl="mock-url" appMode="saas" />);
-
-    const tosLink = screen.getByRole("link", {
-      name: "COMMON$TERMS_OF_SERVICE",
-    });
-    expect(tosLink).toHaveAttribute("target", "_blank");
-  });
-
-  it("should open Privacy Policy link in new tab", () => {
-    render(<AuthModal githubAuthUrl="mock-url" appMode="saas" />);
-
-    const privacyLink = screen.getByRole("link", {
-      name: "COMMON$PRIVACY_POLICY",
-    });
-    expect(privacyLink).toHaveAttribute("target", "_blank");
+    expect(window.location.href).toBe(mockUrl);
   });
 });

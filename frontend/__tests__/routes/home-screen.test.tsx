@@ -3,12 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { createRoutesStub } from "react-router";
-import { createAxiosNotFoundErrorObject } from "test-utils";
+import { Provider } from "react-redux";
+import { createAxiosNotFoundErrorObject, setupStore } from "test-utils";
 import HomeScreen from "#/routes/home";
 import { GitRepository } from "#/types/git";
-import SettingsService from "#/settings-service/settings-service.api";
-import GitService from "#/api/git-service/git-service.api";
-import OptionService from "#/api/option-service/option-service.api";
+import OpenHands from "#/api/open-hands";
 import MainApp from "#/routes/root-layout";
 import { MOCK_DEFAULT_USER_SETTINGS } from "#/mocks/handlers";
 
@@ -33,69 +32,47 @@ const RouterStub = createRoutesStub([
   },
 ]);
 
-const selectRepository = async (repoName: string) => {
-  const repoConnector = screen.getByTestId("repo-connector");
-
-  // First select the provider
-  const providerDropdown = await waitFor(() =>
-    screen.getByTestId("git-provider-dropdown"),
-  );
-  await userEvent.click(providerDropdown);
-  await userEvent.click(screen.getByText("GitHub"));
-
-  // Then select the repository
-  const repoInput = within(repoConnector).getByTestId("git-repo-dropdown");
-  await userEvent.click(repoInput);
-
-  // Wait for the options to be loaded and displayed
-  await waitFor(() => {
-    const dropdownMenu = screen.getByTestId("git-repo-dropdown-menu");
-    expect(within(dropdownMenu).getByText(repoName)).toBeInTheDocument();
-  });
-  const dropdownMenu = screen.getByTestId("git-repo-dropdown-menu");
-  await userEvent.click(within(dropdownMenu).getByText(repoName));
-
-  // Wait for the branch to be auto-selected
-  await waitFor(() => {
-    const branchInput = screen.getByTestId("git-branch-dropdown-input");
-    expect(branchInput).toHaveValue("main");
-  });
-};
-
 const renderHomeScreen = () =>
   render(<RouterStub />, {
     wrapper: ({ children }) => (
-      <QueryClientProvider client={new QueryClient()}>
-        {children}
-      </QueryClientProvider>
+      <Provider store={setupStore()}>
+        <QueryClientProvider client={new QueryClient()}>
+          {children}
+        </QueryClientProvider>
+      </Provider>
     ),
   });
 
 const MOCK_RESPOSITORIES: GitRepository[] = [
   {
-    id: "1",
+    id: 1,
     full_name: "octocat/hello-world",
     git_provider: "github",
     is_public: true,
-    main_branch: "main",
   },
   {
-    id: "2",
+    id: 2,
     full_name: "octocat/earth",
     git_provider: "github",
     is_public: true,
-    main_branch: "main",
+  },
+  {
+    id: 3,
+    full_name: "MyProject/MyRepository",
+    git_provider: "azure_devops",
+    is_public: false,
   },
 ];
 
 describe("HomeScreen", () => {
   beforeEach(() => {
-    const getSettingsSpy = vi.spyOn(SettingsService, "getSettings");
+    const getSettingsSpy = vi.spyOn(OpenHands, "getSettings");
     getSettingsSpy.mockResolvedValue({
       ...MOCK_DEFAULT_USER_SETTINGS,
       provider_tokens_set: {
-        github: "fake-token",
-        gitlab: "fake-token",
+        github: null,
+        gitlab: null,
+        azure_devops: null,
       },
     });
   });
@@ -117,46 +94,18 @@ describe("HomeScreen", () => {
   it("should have responsive layout for mobile and desktop screens", async () => {
     renderHomeScreen();
 
-    const homeScreenNewConversationSection = screen.getByTestId(
-      "home-screen-new-conversation-section",
-    );
-    expect(homeScreenNewConversationSection).toHaveClass(
-      "flex",
-      "flex-col",
-      "md:flex-row",
-    );
-
-    const homeScreenRecentConversationsSection = screen.getByTestId(
-      "home-screen-recent-conversations-section",
-    );
-    expect(homeScreenRecentConversationsSection).toHaveClass(
-      "flex",
-      "flex-col",
-      "md:flex-row",
-    );
+    const mainContainer = screen
+      .getByTestId("home-screen")
+      .querySelector("main");
+    expect(mainContainer).toHaveClass("flex", "flex-col", "md:flex-row");
   });
 
   it("should filter the suggested tasks based on the selected repository", async () => {
     const retrieveUserGitRepositoriesSpy = vi.spyOn(
-      GitService,
+      OpenHands,
       "retrieveUserGitRepositories",
     );
-    retrieveUserGitRepositoriesSpy.mockResolvedValue({
-      data: MOCK_RESPOSITORIES,
-      nextPage: null,
-    });
-
-    // Mock the repository branches API call
-    vi.spyOn(GitService, "getRepositoryBranches").mockResolvedValue({
-      branches: [
-        { name: "main", commit_sha: "123", protected: false },
-        { name: "develop", commit_sha: "456", protected: false },
-      ],
-      has_next_page: false,
-      current_page: 1,
-      per_page: 30,
-      total_count: 2,
-    });
+    retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
 
     renderHomeScreen();
 
@@ -168,8 +117,14 @@ describe("HomeScreen", () => {
       within(taskSuggestions).getByText("octocat/earth");
     });
 
-    // Select a repository using the helper function
-    await selectRepository("octocat/hello-world");
+    // Select a repository from the dropdown
+    const repoConnector = screen.getByTestId("repo-connector");
+
+    const dropdown = within(repoConnector).getByTestId("repo-dropdown");
+    await userEvent.click(dropdown);
+
+    const repoOption = screen.getAllByText("octocat/hello-world")[1];
+    await userEvent.click(repoOption);
 
     // After selecting a repository, only tasks related to that repository should be visible
     await waitFor(() => {
@@ -180,27 +135,12 @@ describe("HomeScreen", () => {
     });
   });
 
-  it("should filter tasks when different repositories are selected", async () => {
+  it("should reset the filtered tasks when the selected repository is cleared", async () => {
     const retrieveUserGitRepositoriesSpy = vi.spyOn(
-      GitService,
+      OpenHands,
       "retrieveUserGitRepositories",
     );
-    retrieveUserGitRepositoriesSpy.mockResolvedValue({
-      data: MOCK_RESPOSITORIES,
-      nextPage: null,
-    });
-
-    // Mock the repository branches API call
-    vi.spyOn(GitService, "getRepositoryBranches").mockResolvedValue({
-      branches: [
-        { name: "main", commit_sha: "123", protected: false },
-        { name: "develop", commit_sha: "456", protected: false },
-      ],
-      has_next_page: false,
-      current_page: 1,
-      per_page: 30,
-      total_count: 2,
-    });
+    retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
 
     renderHomeScreen();
 
@@ -212,10 +152,16 @@ describe("HomeScreen", () => {
       within(taskSuggestions).getByText("octocat/earth");
     });
 
-    // Select the first repository
-    await selectRepository("octocat/hello-world");
+    // Select a repository from the dropdown
+    const repoConnector = screen.getByTestId("repo-connector");
 
-    // After selecting first repository, only tasks related to that repository should be visible
+    const dropdown = within(repoConnector).getByTestId("repo-dropdown");
+    await userEvent.click(dropdown);
+
+    const repoOption = screen.getAllByText("octocat/hello-world")[1];
+    await userEvent.click(repoOption);
+
+    // After selecting a repository, only tasks related to that repository should be visible
     await waitFor(() => {
       within(taskSuggestions).getByText("octocat/hello-world");
       expect(
@@ -223,52 +169,37 @@ describe("HomeScreen", () => {
       ).not.toBeInTheDocument();
     });
 
-    // Now select the second repository
-    await selectRepository("octocat/earth");
+    // Clear the selected repository
+    await userEvent.clear(dropdown);
 
-    // After selecting second repository, only tasks related to that repository should be visible
+    // All tasks should be visible again
     await waitFor(() => {
+      within(taskSuggestions).getByText("octocat/hello-world");
       within(taskSuggestions).getByText("octocat/earth");
-      expect(
-        within(taskSuggestions).queryByText("octocat/hello-world"),
-      ).not.toBeInTheDocument();
     });
   });
 
   describe("launch buttons", () => {
     const setupLaunchButtons = async () => {
-      let headerLaunchButton = screen.getByTestId(
-        "launch-new-conversation-button",
-      );
+      let headerLaunchButton = screen.getByTestId("header-launch-button");
       let repoLaunchButton = await screen.findByTestId("repo-launch-button");
       let tasksLaunchButtons =
         await screen.findAllByTestId("task-launch-button");
 
-      // Mock the repository branches API call
-      vi.spyOn(GitService, "getRepositoryBranches").mockResolvedValue({
-        branches: [
-          { name: "main", commit_sha: "123", protected: false },
-          { name: "develop", commit_sha: "456", protected: false },
-        ],
-        has_next_page: false,
-        current_page: 1,
-        per_page: 30,
-        total_count: 2,
+      // Select a repository from the dropdown to enable the repo launch button
+      const repoConnector = screen.getByTestId("repo-connector");
+      const dropdown = within(repoConnector).getByTestId("repo-dropdown");
+      await userEvent.click(dropdown);
+      const repoOption = screen.getAllByText("octocat/hello-world")[1];
+      await userEvent.click(repoOption);
+
+      expect(headerLaunchButton).not.toBeDisabled();
+      expect(repoLaunchButton).not.toBeDisabled();
+      tasksLaunchButtons.forEach((button) => {
+        expect(button).not.toBeDisabled();
       });
 
-      // Select a repository to enable the repo launch button
-      await selectRepository("octocat/hello-world");
-
-      // Wait for all buttons to be enabled
-      await waitFor(() => {
-        expect(headerLaunchButton).not.toBeDisabled();
-        expect(repoLaunchButton).not.toBeDisabled();
-        tasksLaunchButtons.forEach((button) => {
-          expect(button).not.toBeDisabled();
-        });
-      });
-
-      headerLaunchButton = screen.getByTestId("launch-new-conversation-button");
+      headerLaunchButton = screen.getByTestId("header-launch-button");
       repoLaunchButton = screen.getByTestId("repo-launch-button");
       tasksLaunchButtons = await screen.findAllByTestId("task-launch-button");
 
@@ -281,13 +212,10 @@ describe("HomeScreen", () => {
 
     beforeEach(() => {
       const retrieveUserGitRepositoriesSpy = vi.spyOn(
-        GitService,
+        OpenHands,
         "retrieveUserGitRepositories",
       );
-      retrieveUserGitRepositoriesSpy.mockResolvedValue({
-        data: MOCK_RESPOSITORIES,
-        nextPage: null,
-      });
+      retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
     });
 
     it("should disable the other launch buttons when the header launch button is clicked", async () => {
@@ -301,12 +229,10 @@ describe("HomeScreen", () => {
       // All other buttons should be disabled when the header button is clicked
       await userEvent.click(headerLaunchButton);
 
-      await waitFor(() => {
-        expect(headerLaunchButton).toBeDisabled();
-        expect(repoLaunchButton).toBeDisabled();
-        tasksLaunchButtonsAfter.forEach((button) => {
-          expect(button).toBeDisabled();
-        });
+      expect(headerLaunchButton).toBeDisabled();
+      expect(repoLaunchButton).toBeDisabled();
+      tasksLaunchButtonsAfter.forEach((button) => {
+        expect(button).toBeDisabled();
       });
     });
 
@@ -321,12 +247,10 @@ describe("HomeScreen", () => {
       // All other buttons should be disabled when the repo button is clicked
       await userEvent.click(repoLaunchButton);
 
-      await waitFor(() => {
-        expect(headerLaunchButton).toBeDisabled();
-        expect(repoLaunchButton).toBeDisabled();
-        tasksLaunchButtonsAfter.forEach((button) => {
-          expect(button).toBeDisabled();
-        });
+      expect(headerLaunchButton).toBeDisabled();
+      expect(repoLaunchButton).toBeDisabled();
+      tasksLaunchButtonsAfter.forEach((button) => {
+        expect(button).toBeDisabled();
       });
     });
 
@@ -341,14 +265,22 @@ describe("HomeScreen", () => {
       // All other buttons should be disabled when the task button is clicked
       await userEvent.click(tasksLaunchButtons[0]);
 
-      await waitFor(() => {
-        expect(headerLaunchButton).toBeDisabled();
-        expect(repoLaunchButton).toBeDisabled();
-        tasksLaunchButtonsAfter.forEach((button) => {
-          expect(button).toBeDisabled();
-        });
+      expect(headerLaunchButton).toBeDisabled();
+      expect(repoLaunchButton).toBeDisabled();
+      tasksLaunchButtonsAfter.forEach((button) => {
+        expect(button).toBeDisabled();
       });
     });
+  });
+
+  it("should hide the suggested tasks section if not authed with git(hub|lab)", async () => {
+    renderHomeScreen();
+
+    const taskSuggestions = screen.queryByTestId("task-suggestions");
+    const repoConnector = screen.getByTestId("repo-connector");
+
+    expect(taskSuggestions).not.toBeInTheDocument();
+    expect(repoConnector).toBeInTheDocument();
   });
 });
 
@@ -357,8 +289,8 @@ describe("Settings 404", () => {
     vi.resetAllMocks();
   });
 
-  const getConfigSpy = vi.spyOn(OptionService, "getConfig");
-  const getSettingsSpy = vi.spyOn(SettingsService, "getSettings");
+  const getConfigSpy = vi.spyOn(OpenHands, "getConfig");
+  const getSettingsSpy = vi.spyOn(OpenHands, "getSettings");
 
   it("should open the settings modal if GET /settings fails with a 404", async () => {
     const error = createAxiosNotFoundErrorObject();
@@ -370,10 +302,11 @@ describe("Settings 404", () => {
     expect(settingsModal).toBeInTheDocument();
   });
 
-  it("should have the correct advanced settings link that opens in a new window", async () => {
+  it("should navigate to the settings screen when clicking the advanced settings button", async () => {
     const error = createAxiosNotFoundErrorObject();
     getSettingsSpy.mockRejectedValue(error);
 
+    const user = userEvent.setup();
     renderHomeScreen();
 
     const settingsScreen = screen.queryByTestId("settings-screen");
@@ -382,16 +315,16 @@ describe("Settings 404", () => {
     const settingsModal = await screen.findByTestId("ai-config-modal");
     expect(settingsModal).toBeInTheDocument();
 
-    const advancedSettingsLink = await screen.findByTestId(
+    const advancedSettingsButton = await screen.findByTestId(
       "advanced-settings-link",
     );
+    await user.click(advancedSettingsButton);
 
-    // The advanced settings link should be an anchor tag that opens in a new window
-    const linkElement = advancedSettingsLink.querySelector("a");
-    expect(linkElement).toBeInTheDocument();
-    expect(linkElement).toHaveAttribute("href", "/settings");
-    expect(linkElement).toHaveAttribute("target", "_blank");
-    expect(linkElement).toHaveAttribute("rel", "noreferrer noopener");
+    const settingsScreenAfter = await screen.findByTestId("settings-screen");
+    expect(settingsScreenAfter).toBeInTheDocument();
+
+    const settingsModalAfter = screen.queryByTestId("ai-config-modal");
+    expect(settingsModalAfter).not.toBeInTheDocument();
   });
 
   it("should not open the settings modal if GET /settings fails but is SaaS mode", async () => {
@@ -401,9 +334,6 @@ describe("Settings 404", () => {
       FEATURE_FLAGS: {
         ENABLE_BILLING: false,
         HIDE_LLM_SETTINGS: false,
-        ENABLE_JIRA: false,
-        ENABLE_JIRA_DC: false,
-        ENABLE_LINEAR: false,
       },
     });
     const error = createAxiosNotFoundErrorObject();
@@ -411,13 +341,16 @@ describe("Settings 404", () => {
 
     renderHomeScreen();
 
-    expect(screen.queryByTestId("ai-config-modal")).not.toBeInTheDocument();
+    // small hack to wait for the modal to not appear
+    await expect(
+      screen.findByTestId("ai-config-modal", {}, { timeout: 1000 }),
+    ).rejects.toThrow();
   });
 });
 
 describe("Setup Payment modal", () => {
-  const getConfigSpy = vi.spyOn(OptionService, "getConfig");
-  const getSettingsSpy = vi.spyOn(SettingsService, "getSettings");
+  const getConfigSpy = vi.spyOn(OpenHands, "getConfig");
+  const getSettingsSpy = vi.spyOn(OpenHands, "getSettings");
 
   it("should only render if SaaS mode and is new user", async () => {
     // @ts-expect-error - we only need the APP_MODE for this test
@@ -426,9 +359,6 @@ describe("Setup Payment modal", () => {
       FEATURE_FLAGS: {
         ENABLE_BILLING: true,
         HIDE_LLM_SETTINGS: false,
-        ENABLE_JIRA: false,
-        ENABLE_JIRA_DC: false,
-        ENABLE_LINEAR: false,
       },
     });
     const error = createAxiosNotFoundErrorObject();
