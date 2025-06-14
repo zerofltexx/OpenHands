@@ -19,25 +19,16 @@ export const useAutoLogin = () => {
   const githubAuthUrl = useAuthUrl({
     appMode: config?.APP_MODE || null,
     identityProvider: "github",
-    authUrl: config?.AUTH_URL,
   });
 
   const gitlabAuthUrl = useAuthUrl({
     appMode: config?.APP_MODE || null,
     identityProvider: "gitlab",
-    authUrl: config?.AUTH_URL,
   });
 
-  const bitbucketAuthUrl = useAuthUrl({
+  const azureDevOpsAuthUrl = useAuthUrl({
     appMode: config?.APP_MODE || null,
-    identityProvider: "bitbucket",
-    authUrl: config?.AUTH_URL,
-  });
-
-  const enterpriseSsoUrl = useAuthUrl({
-    appMode: config?.APP_MODE || null,
-    identityProvider: "enterprise_sso",
-    authUrl: config?.AUTH_URL,
+    identityProvider: "azure_devops",
   });
 
   useEffect(() => {
@@ -67,10 +58,8 @@ export const useAutoLogin = () => {
       authUrl = githubAuthUrl;
     } else if (loginMethod === LoginMethod.GITLAB) {
       authUrl = gitlabAuthUrl;
-    } else if (loginMethod === LoginMethod.BITBUCKET) {
-      authUrl = bitbucketAuthUrl;
-    } else if (loginMethod === LoginMethod.ENTERPRISE_SSO) {
-      authUrl = enterpriseSsoUrl;
+    } else if (loginMethod === LoginMethod.AZURE_DEVOPS) {
+      authUrl = azureDevOpsAuthUrl;
     }
 
     // If we have an auth URL, redirect to it
@@ -90,7 +79,6 @@ export const useAutoLogin = () => {
     loginMethod,
     githubAuthUrl,
     gitlabAuthUrl,
-    bitbucketAuthUrl,
-    enterpriseSsoUrl,
+    azureDevOpsAuthUrl,
   ]);
 };
