@@ -111,8 +111,10 @@ def get_provider_tokens():
 
     if 'AZURE_DEVOPS_TOKEN' in os.environ:
         azure_devops_token = SecretStr(os.environ['AZURE_DEVOPS_TOKEN'])
+        azure_devops_host = os.environ.get('AZURE_DEVOPS_HOST')
         provider_tokens[ProviderType.AZURE_DEVOPS] = ProviderToken(
-            token=azure_devops_token
+            token=azure_devops_token,
+            host=azure_devops_host
         )
 
     # Wrap provider tokens in UserSecrets if any tokens were found
