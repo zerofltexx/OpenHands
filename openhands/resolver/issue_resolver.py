@@ -28,7 +28,6 @@ from openhands.events.observation import (
 )
 from openhands.events.stream import EventStreamSubscriber
 from openhands.integrations.service_types import ProviderType
-from openhands.llm.llm_registry import LLMRegistry
 from openhands.resolver.interfaces.issue import Issue
 from openhands.resolver.interfaces.issue_definitions import (
     ServiceContextIssue,
@@ -51,6 +50,7 @@ AGENT_CLASS = 'CodeActAgent'
 
 class IssueResolver:
     GITLAB_CI = os.getenv('GITLAB_CI') == 'true'
+    AZURE_DEVOPS_CI = os.getenv('TF_BUILD') == 'True'
 
     def __init__(self, args: Namespace) -> None:
         """Initialize the IssueResolver with the given parameters.
@@ -71,6 +71,7 @@ class IssueResolver:
             comment_id: Optional ID of a specific comment to focus on.
             base_domain: The base domain for the git server.
         """
+
         parts = args.selected_repo.rsplit('/', 1)
         if len(parts) < 2:
             raise ValueError('Invalid repository format. Expected owner/repo')
@@ -81,6 +82,7 @@ class IssueResolver:
             or os.getenv('GITHUB_TOKEN')
             or os.getenv('GITLAB_TOKEN')
             or os.getenv('BITBUCKET_TOKEN')
+            or os.getenv('AZURE_DEVOPS_TOKEN')
         )
         username = args.username if args.username else os.getenv('GIT_USERNAME')
         if not username:
@@ -130,6 +132,8 @@ class IssueResolver:
                 else 'gitlab.com'
                 if platform == ProviderType.GITLAB
                 else 'bitbucket.org'
+                if platform == ProviderType.BITBUCKET
+                else 'dev.azure.com'
             )
 
         self.output_dir = args.output_dir
@@ -149,7 +153,6 @@ class IssueResolver:
             args.base_container_image,
             args.runtime_container_image,
             args.is_experimental,
-            args.runtime,
         )
 
         self.owner = owner
@@ -183,11 +186,9 @@ class IssueResolver:
         base_container_image: str | None,
         runtime_container_image: str | None,
         is_experimental: bool,
-        runtime: str | None = None,
     ) -> OpenHandsConfig:
         config.default_agent = 'CodeActAgent'
-        # Use provided runtime or fallback to config value or default to 'docker'
-        config.runtime = runtime or config.runtime or 'docker'
+        config.runtime = 'docker'
         config.max_budget_per_task = 4
         config.max_iterations = max_iterations
 
@@ -252,6 +253,14 @@ class IssueResolver:
             if user_id == 0:
                 sandbox_config.user_id = get_unique_uid()
 
+        # Configure sandbox for Azure DevOps CI environment
+        if cls.AZURE_DEVOPS_CI:
+            sandbox_config.use_host_network = False
+            sandbox_config.enable_auto_lint = True
+            sandbox_config.runtime_startup_env_vars = {
+                'TF_BUILD': 'True',
+            }
+
         openhands_config.sandbox.base_container_image = (
             sandbox_config.base_container_image
         )
@@ -285,7 +294,7 @@ class IssueResolver:
         if not isinstance(obs, CmdOutputObservation) or obs.exit_code != 0:
             raise RuntimeError(f'Failed to change directory to /workspace.\n{obs}')
 
-        if self.platform == ProviderType.GITLAB and self.GITLAB_CI:
+        if (self.platform == ProviderType.GITLAB and self.GITLAB_CI) or (self.platform == ProviderType.AZURE_DEVOPS and self.AZURE_DEVOPS_CI):
             action = CmdRunAction(command='sudo chown -R 1001:0 /workspace/*')
             logger.info(action, extra={'msg_type': 'ACTION'})
             obs = runtime.run_action(action)
@@ -347,7 +356,7 @@ class IssueResolver:
         if not isinstance(obs, CmdOutputObservation) or obs.exit_code != 0:
             raise RuntimeError(f'Failed to set git config. Observation: {obs}')
 
-        if self.platform == ProviderType.GITLAB and self.GITLAB_CI:
+        if (self.platform == ProviderType.GITLAB and self.GITLAB_CI) or (self.platform == ProviderType.AZURE_DEVOPS and self.AZURE_DEVOPS_CI):
             action = CmdRunAction(command='sudo git add -A')
         else:
             action = CmdRunAction(command='git add -A')
@@ -413,8 +422,7 @@ class IssueResolver:
             shutil.rmtree(self.workspace_base)
         shutil.copytree(os.path.join(self.output_dir, 'repo'), self.workspace_base)
 
-        llm_registry = LLMRegistry(self.app_config)
-        runtime = create_runtime(self.app_config, llm_registry)
+        runtime = create_runtime(self.app_config)
         await runtime.connect()
 
         def on_event(evt: Event) -> None:
@@ -541,6 +549,7 @@ class IssueResolver:
         Args:
             reset_logger: Whether to reset the logger for multiprocessing.
         """
+
         issue = self.extract_issue()
 
         if self.comment_id is not None:

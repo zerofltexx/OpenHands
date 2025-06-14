@@ -17,9 +17,7 @@ import httpx
 
 from openhands.core.config import OpenHandsConfig, SandboxConfig
 from openhands.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
-from openhands.core.exceptions import (
-    AgentRuntimeDisconnectedError,
-)
+from openhands.core.exceptions import AgentRuntimeDisconnectedError
 from openhands.core.logger import openhands_logger as logger
 from openhands.events import EventSource, EventStream, EventStreamSubscriber
 from openhands.events.action import (
@@ -33,7 +31,6 @@ from openhands.events.action import (
     FileReadAction,
     FileWriteAction,
     IPythonRunCellAction,
-    TaskTrackingAction,
 )
 from openhands.events.action.mcp import MCPAction
 from openhands.events.event import Event
@@ -44,7 +41,6 @@ from openhands.events.observation import (
     FileReadObservation,
     NullObservation,
     Observation,
-    TaskTrackingObservation,
     UserRejectObservation,
 )
 from openhands.events.serialization.action import ACTION_TYPE_TO_CLASS
@@ -54,7 +50,6 @@ from openhands.integrations.provider import (
     ProviderType,
 )
 from openhands.integrations.service_types import AuthenticationError
-from openhands.llm.llm_registry import LLMRegistry
 from openhands.microagent import (
     BaseMicroagent,
     load_microagents_from_dir,
@@ -67,8 +62,6 @@ from openhands.runtime.plugins import (
 from openhands.runtime.runtime_status import RuntimeStatus
 from openhands.runtime.utils.edit import FileEditRuntimeMixin
 from openhands.runtime.utils.git_handler import CommandResult, GitHandler
-from openhands.security import SecurityAnalyzer, options
-from openhands.storage.locations import get_conversation_dir
 from openhands.utils.async_utils import (
     GENERAL_TIMEOUT,
     call_async_from_sync,
@@ -107,10 +100,11 @@ class Runtime(FileEditRuntimeMixin):
 
     Built-in implementations include:
     - DockerRuntime: Containerized environment using Docker
+    - E2BRuntime: Secure sandbox using E2B
     - RemoteRuntime: Remote execution environment
+    - ModalRuntime: Scalable cloud environment using Modal
     - LocalRuntime: Local execution for development
-    - KubernetesRuntime: Kubernetes-based execution environment
-    - CLIRuntime: Command-line interface runtime
+    - DaytonaRuntime: Cloud development environment using Daytona
 
     Args:
         sid: Session ID that uniquely identifies the current user session
@@ -120,28 +114,25 @@ class Runtime(FileEditRuntimeMixin):
     config: OpenHandsConfig
     initial_env_vars: dict[str, str]
     attach_to_existing: bool
-    status_callback: Callable[[str, RuntimeStatus, str], None] | None
+    status_callback: Callable[[str, str, str], None] | None
     runtime_status: RuntimeStatus | None
     _runtime_initialized: bool = False
-    security_analyzer: 'SecurityAnalyzer | None' = None
 
     def __init__(
         self,
         config: OpenHandsConfig,
         event_stream: EventStream,
-        llm_registry: LLMRegistry,
         sid: str = 'default',
         plugins: list[PluginRequirement] | None = None,
         env_vars: dict[str, str] | None = None,
-        status_callback: Callable[[str, RuntimeStatus, str], None] | None = None,
+        status_callback: Callable[[str, str, str], None] | None = None,
         attach_to_existing: bool = False,
         headless_mode: bool = False,
         user_id: str | None = None,
         git_provider_tokens: PROVIDER_TOKEN_TYPE | None = None,
     ):
         self.git_handler = GitHandler(
-            execute_shell_fn=self._execute_shell_fn_git_handler,
-            create_file_fn=self._create_file_fn_git_handler,
+            execute_shell_fn=self._execute_shell_fn_git_handler
         )
         self.sid = sid
         self.event_stream = event_stream
@@ -183,26 +174,12 @@ class Runtime(FileEditRuntimeMixin):
 
         # Load mixins
         FileEditRuntimeMixin.__init__(
-            self,
-            enable_llm_editor=config.get_agent_config().enable_llm_editor,
-            llm_registry=llm_registry,
+            self, enable_llm_editor=config.get_agent_config().enable_llm_editor
         )
 
         self.user_id = user_id
         self.git_provider_tokens = git_provider_tokens
         self.runtime_status = None
-
-        # Initialize security analyzer
-        self.security_analyzer = None
-        if self.config.security.security_analyzer:
-            analyzer_cls = options.SecurityAnalyzers.get(
-                self.config.security.security_analyzer, SecurityAnalyzer
-            )
-            self.security_analyzer = analyzer_cls()
-            self.security_analyzer.set_event_stream(self.event_stream)
-            logger.debug(
-                f'Security analyzer {analyzer_cls.__name__} initialized for runtime {self.sid}'
-            )
 
     @property
     def runtime_initialized(self) -> bool:
@@ -216,11 +193,9 @@ class Runtime(FileEditRuntimeMixin):
         if self.config.sandbox.runtime_startup_env_vars:
             self.add_env_vars(self.config.sandbox.runtime_startup_env_vars)
 
-        # Configure git settings
-        self._setup_git_config()
-
     def close(self) -> None:
-        """This should only be called by conversation manager or closing the session.
+        """
+        This should only be called by conversation manager or closing the session.
         If called for instance by error handling, it could prevent recovery.
         """
         pass
@@ -233,13 +208,16 @@ class Runtime(FileEditRuntimeMixin):
         message = f'[runtime {self.sid}] {message}'
         getattr(logger, level)(message, stacklevel=2)
 
-    def set_runtime_status(
-        self, runtime_status: RuntimeStatus, msg: str = '', level: str = 'info'
-    ):
+    def set_runtime_status(self, runtime_status: RuntimeStatus):
         """Sends a status message if the callback function was provided."""
         self.runtime_status = runtime_status
         if self.status_callback:
-            self.status_callback(level, runtime_status, msg)
+            msg_id: str = runtime_status.value  # type: ignore
+            self.status_callback('info', msg_id, runtime_status.message)
+
+    def send_error_message(self, message_id: str, message: str):
+        if self.status_callback:
+            self.status_callback('error', message_id, message)
 
     # ====================================================================
 
@@ -295,7 +273,7 @@ class Runtime(FileEditRuntimeMixin):
                 # Note: json.dumps gives us nice escaping for free
                 cmd += f'export {key}={json.dumps(value)}; '
                 # Add to .bashrc if not already present
-                bashrc_cmd += f'touch ~/.bashrc; grep -q "^export {key}=" ~/.bashrc || echo "export {key}={json.dumps(value)}" >> ~/.bashrc; '
+                bashrc_cmd += f'grep -q "^export {key}=" ~/.bashrc || echo "export {key}={json.dumps(value)}" >> ~/.bashrc; '
 
             if not cmd:
                 return
@@ -323,7 +301,12 @@ class Runtime(FileEditRuntimeMixin):
             asyncio.get_event_loop().run_until_complete(self._handle_action(event))
 
     async def _export_latest_git_provider_tokens(self, event: Action) -> None:
-        """Refresh runtime provider tokens when agent attemps to run action with provider token"""
+        """
+        Refresh runtime provider tokens when agent attemps to run action with provider token
+        """
+        if not self.user_id:
+            return
+
         providers_called = ProviderHandler.check_cmd_action_for_provider_token_ref(
             event
         )
@@ -331,24 +314,9 @@ class Runtime(FileEditRuntimeMixin):
         if not providers_called:
             return
 
-        provider_handler = ProviderHandler(
-            provider_tokens=self.git_provider_tokens
-            or cast(PROVIDER_TOKEN_TYPE, MappingProxyType({})),
-            external_auth_id=self.user_id,
-            external_token_manager=True,
-            session_api_key=self.session_api_key,
-            sid=self.sid,
-        )
-
-        logger.info(
-            f'Fetching latest provider tokens for runtime: {self.sid}, '
-            f'providers: {providers_called}'
-        )
-        env_vars = await provider_handler.get_env_vars(
+        logger.info(f'Fetching latest provider tokens for runtime: {self.sid}')
+        env_vars = await self.provider_handler.get_env_vars(
             providers=providers_called, expose_secrets=False, get_latest=True
-        )
-        logger.info(
-            f'Successfully fetched {len(env_vars)} token(s) for runtime: {self.sid}'
         )
 
         if len(env_vars) == 0:
@@ -356,14 +324,13 @@ class Runtime(FileEditRuntimeMixin):
 
         try:
             if self.event_stream:
-                await provider_handler.set_event_stream_secrets(
+                await self.provider_handler.set_event_stream_secrets(
                     self.event_stream, env_vars=env_vars
                 )
-            self.add_env_vars(provider_handler.expose_env_vars(env_vars))
+            self.add_env_vars(self.provider_handler.expose_env_vars(env_vars))
         except Exception as e:
-            logger.error(
-                f'Failed to export latest github token to runtime: {self.sid}, {e}',
-                exc_info=True,
+            logger.warning(
+                f'Failed export latest github token to runtime: {self.sid}, {e}'
             )
 
     async def _handle_action(self, event: Action) -> None:
@@ -377,23 +344,16 @@ class Runtime(FileEditRuntimeMixin):
                 observation: Observation = await self.call_tool_mcp(event)
             else:
                 observation = await call_sync_from_async(self.run_action, event)
-        except PermissionError as e:
-            # Handle PermissionError specially - convert to ErrorObservation
-            # so the agent can receive feedback and continue execution
-            observation = ErrorObservation(content=str(e))
-        except (httpx.NetworkError, AgentRuntimeDisconnectedError) as e:
-            runtime_status = RuntimeStatus.ERROR_RUNTIME_DISCONNECTED
-            error_message = f'{type(e).__name__}: {str(e)}'
-            self.log('error', f'Unexpected error while running action: {error_message}')
-            self.log('error', f'Problematic action: {str(event)}')
-            self.set_runtime_status(runtime_status, error_message, level='error')
-            return
         except Exception as e:
-            runtime_status = RuntimeStatus.ERROR
+            err_id = ''
+            if isinstance(e, httpx.NetworkError) or isinstance(
+                e, AgentRuntimeDisconnectedError
+            ):
+                err_id = 'STATUS$ERROR_RUNTIME_DISCONNECTED'
             error_message = f'{type(e).__name__}: {str(e)}'
             self.log('error', f'Unexpected error while running action: {error_message}')
             self.log('error', f'Problematic action: {str(event)}')
-            self.set_runtime_status(runtime_status, error_message, level='error')
+            self.send_error_message(err_id, error_message)
             return
 
         observation._cause = event.id  # type: ignore[attr-defined]
@@ -412,31 +372,75 @@ class Runtime(FileEditRuntimeMixin):
         selected_repository: str | None,
         selected_branch: str | None,
     ) -> str:
+        repository = None
+        if selected_repository:  # Determine provider from repo name
+            try:
+                provider_handler = ProviderHandler(
+                    git_provider_tokens or MappingProxyType({})
+                )
+                repository = await provider_handler.verify_repo_provider(
+                    selected_repository
+                )
+            except AuthenticationError:
+                raise RuntimeError(
+                    'Git provider authentication issue when cloning repo'
+                )
+
         if not selected_repository:
-            if self.config.init_git_in_empty_workspace:
+            # In SaaS mode (indicated by user_id being set), always run git init
+            # In OSS mode, only run git init if workspace_base is not set
+            if self.user_id or not self.config.workspace_base:
                 logger.debug(
                     'No repository selected. Initializing a new git repository in the workspace.'
                 )
                 action = CmdRunAction(
                     command=f'git init && git config --global --add safe.directory {self.workspace_root}'
                 )
-                await call_sync_from_async(self.run_action, action)
+                self.run_action(action)
             else:
                 logger.info(
                     'In workspace mount mode, not initializing a new git repository.'
                 )
             return ''
 
-        remote_repo_url = await self.provider_handler.get_authenticated_git_url(
-            selected_repository
-        )
+        # This satisfies mypy because param is optional, but `verify_repo_provider` guarentees this gets populated
+        if not repository:
+            return ''
+
+        provider = repository.git_provider
+        provider_domains = {
+            ProviderType.GITHUB: 'github.com',
+            ProviderType.GITLAB: 'gitlab.com',
+            ProviderType.AZURE_DEVOPS: 'dev.azure.com',
+        }
+
+        domain = provider_domains[provider]
+
+        # If git_provider_tokens is provided, use the host from the token if available
+        if git_provider_tokens and provider in git_provider_tokens:
+            domain = git_provider_tokens[provider].host or domain
+
+        # Try to use token if available, otherwise use public URL
+        if git_provider_tokens and provider in git_provider_tokens:
+            git_token = git_provider_tokens[provider].token
+            if git_token:
+                if provider == ProviderType.GITLAB:
+                    remote_repo_url = f'https://oauth2:{git_token.get_secret_value()}@{domain}/{selected_repository}.git'
+                elif provider == ProviderType.AZURE_DEVOPS:
+                    remote_repo_url = f'https://{git_token.get_secret_value()}@{domain}/{selected_repository}.git'
+                else:
+                    remote_repo_url = f'https://{git_token.get_secret_value()}@{domain}/{selected_repository}.git'
+            else:
+                remote_repo_url = f'https://{domain}/{selected_repository}.git'
+        else:
+            remote_repo_url = f'https://{domain}/{selected_repository}.git'
 
         if not remote_repo_url:
             raise ValueError('Missing either Git token or valid repository')
 
         if self.status_callback:
             self.status_callback(
-                'info', RuntimeStatus.SETTING_UP_WORKSPACE, 'Setting up workspace...'
+                'info', 'STATUS$SETTING_UP_WORKSPACE', 'Setting up workspace...'
             )
 
         dir_name = selected_repository.split('/')[-1]
@@ -458,14 +462,14 @@ class Runtime(FileEditRuntimeMixin):
         )
 
         clone_action = CmdRunAction(command=clone_command)
-        await call_sync_from_async(self.run_action, clone_action)
+        self.run_action(clone_action)
 
         cd_checkout_action = CmdRunAction(
             command=f'cd {dir_name} && {checkout_command}'
         )
         action = cd_checkout_action
         self.log('info', f'Cloning repo: {selected_repository}')
-        await call_sync_from_async(self.run_action, action)
+        self.run_action(action)
         return dir_name
 
     def maybe_run_setup_script(self):
@@ -477,23 +481,17 @@ class Runtime(FileEditRuntimeMixin):
 
         if self.status_callback:
             self.status_callback(
-                'info', RuntimeStatus.SETTING_UP_WORKSPACE, 'Setting up workspace...'
+                'info', 'STATUS$SETTING_UP_WORKSPACE', 'Setting up workspace...'
             )
 
         # setup scripts time out after 10 minutes
         action = CmdRunAction(
-            f'chmod +x {setup_script} && source {setup_script}',
-            blocking=True,
-            hidden=True,
+            f'chmod +x {setup_script} && source {setup_script}', blocking=True
         )
         action.set_hard_timeout(600)
-
-        # Add the action to the event stream as an ENVIRONMENT event
-        source = EventSource.ENVIRONMENT
-        self.event_stream.add_event(action, source)
-
-        # Execute the action
-        self.run_action(action)
+        obs = self.run_action(action)
+        if not isinstance(obs, CmdOutputObservation) or obs.exit_code != 0:
+            self.log('error', f'Setup script failed: {obs.content}')
 
     @property
     def workspace_root(self) -> Path:
@@ -509,7 +507,7 @@ class Runtime(FileEditRuntimeMixin):
 
         if self.status_callback:
             self.status_callback(
-                'info', RuntimeStatus.SETTING_UP_GIT_HOOKS, 'Setting up git hooks...'
+                'info', 'STATUS$SETTING_UP_GIT_HOOKS', 'Setting up git hooks...'
             )
 
         # Ensure the git hooks directory exists
@@ -604,19 +602,9 @@ fi
             A list of loaded microagents
         """
         loaded_microagents: list[BaseMicroagent] = []
-
-        self.log(
-            'info',
-            f'Attempting to list files in {source_description} microagents directory: {microagents_dir}',
-        )
-
         files = self.list_files(str(microagents_dir))
 
         if not files:
-            self.log(
-                'debug',
-                f'No files found in {source_description} microagents directory: {microagents_dir}',
-            )
             return loaded_microagents
 
         self.log(
@@ -640,49 +628,56 @@ fi
 
             loaded_microagents.extend(repo_agents.values())
             loaded_microagents.extend(knowledge_agents.values())
-        except Exception as e:
-            self.log('error', f'Failed to load agents from {source_description}: {e}')
         finally:
             shutil.rmtree(microagent_folder)
 
         return loaded_microagents
 
-    def _is_gitlab_repository(self, repo_name: str) -> bool:
-        """Check if a repository is hosted on GitLab.
+    def _get_authenticated_git_url(self, repo_path: str) -> str:
+        """Get an authenticated git URL for a repository.
 
         Args:
-            repo_name: Repository name (e.g., "gitlab.com/org/repo" or "org/repo")
+            repo_path: Repository path (e.g., "github.com/acme-co/api")
 
         Returns:
-            True if the repository is hosted on GitLab, False otherwise
+            Authenticated git URL if credentials are available, otherwise regular HTTPS URL
         """
-        try:
-            provider_handler = ProviderHandler(
-                self.git_provider_tokens or MappingProxyType({})
-            )
-            repository = call_async_from_sync(
-                provider_handler.verify_repo_provider,
-                GENERAL_TIMEOUT,
-                repo_name,
-            )
-            return repository.git_provider == ProviderType.GITLAB
-        except Exception:
-            # If we can't determine the provider, assume it's not GitLab
-            # This is a safe fallback since we'll just use the default .openhands
-            return False
+        remote_url = f'https://{repo_path}.git'
+
+        # Determine provider from repo path
+        provider = None
+        if 'github.com' in repo_path:
+            provider = ProviderType.GITHUB
+        elif 'gitlab.com' in repo_path:
+            provider = ProviderType.GITLAB
+        elif 'dev.azure.com' in repo_path:
+            provider = ProviderType.AZURE_DEVOPS
+
+        # Add authentication if available
+        if (
+            provider
+            and self.git_provider_tokens
+            and provider in self.git_provider_tokens
+        ):
+            git_token = self.git_provider_tokens[provider].token
+            if git_token:
+                if provider == ProviderType.GITLAB:
+                    remote_url = f'https://oauth2:{git_token.get_secret_value()}@{repo_path.replace("gitlab.com/", "")}.git'
+                elif provider == ProviderType.AZURE_DEVOPS:
+                    remote_url = f'https://{git_token.get_secret_value()}@{repo_path.replace("dev.azure.com/", "")}.git'
+                else:
+                    remote_url = f'https://{git_token.get_secret_value()}@{repo_path.replace("github.com/", "")}.git'
+
+        return remote_url
 
     def get_microagents_from_org_or_user(
         self, selected_repository: str
     ) -> list[BaseMicroagent]:
-        """Load microagents from the organization or user level repository.
+        """Load microagents from the organization or user level .openhands repository.
 
         For example, if the repository is github.com/acme-co/api, this will check if
         github.com/acme-co/.openhands exists. If it does, it will clone it and load
         the microagents from the ./microagents/ folder.
-
-        For GitLab repositories, it will use openhands-config instead of .openhands
-        since GitLab doesn't support repository names starting with non-alphanumeric
-        characters.
 
         Args:
             selected_repository: The repository path (e.g., "github.com/acme-co/api")
@@ -692,82 +687,33 @@ fi
         """
         loaded_microagents: list[BaseMicroagent] = []
 
-        self.log(
-            'debug',
-            f'Starting org-level microagent loading for repository: {selected_repository}',
-        )
-
         repo_parts = selected_repository.split('/')
-
         if len(repo_parts) < 2:
-            self.log(
-                'warning',
-                f'Repository path has insufficient parts ({len(repo_parts)} < 2), skipping org-level microagents',
-            )
             return loaded_microagents
 
         # Extract the domain and org/user name
+        domain = repo_parts[0] if len(repo_parts) > 2 else 'github.com'
         org_name = repo_parts[-2]
-        self.log(
-            'info',
-            f'Extracted org/user name: {org_name}',
-        )
 
-        # Determine if this is a GitLab repository
-        is_gitlab = self._is_gitlab_repository(selected_repository)
-        self.log(
-            'debug',
-            f'Repository type detection - is_gitlab: {is_gitlab}',
-        )
-
-        # For GitLab, use openhands-config (since .openhands is not a valid repo name)
-        # For other providers, use .openhands
-        if is_gitlab:
-            org_openhands_repo = f'{org_name}/openhands-config'
-        else:
-            org_openhands_repo = f'{org_name}/.openhands'
+        # Construct the org-level .openhands repo path
+        org_openhands_repo = f'{domain}/{org_name}/.openhands'
+        if domain not in org_openhands_repo:
+            org_openhands_repo = f'github.com/{org_openhands_repo}'
 
         self.log(
             'info',
             f'Checking for org-level microagents at {org_openhands_repo}',
         )
 
-        # Try to clone the org-level repo
+        # Try to clone the org-level .openhands repo
         try:
             # Create a temporary directory for the org-level repo
             org_repo_dir = self.workspace_root / f'org_openhands_{org_name}'
-            self.log(
-                'debug',
-                f'Creating temporary directory for org repo: {org_repo_dir}',
-            )
 
             # Get authenticated URL and do a shallow clone (--depth 1) for efficiency
-            try:
-                remote_url = call_async_from_sync(
-                    self.provider_handler.get_authenticated_git_url,
-                    GENERAL_TIMEOUT,
-                    org_openhands_repo,
-                )
-            except AuthenticationError as e:
-                self.log(
-                    'debug',
-                    f'org-level microagent directory {org_openhands_repo} not found: {str(e)}',
-                )
-                raise
-            except Exception as e:
-                self.log(
-                    'debug',
-                    f'Failed to get authenticated URL for {org_openhands_repo}: {str(e)}',
-                )
-                raise
+            remote_url = self._get_authenticated_git_url(org_openhands_repo)
 
-            clone_cmd = (
-                f'GIT_TERMINAL_PROMPT=0 git clone --depth 1 {remote_url} {org_repo_dir}'
-            )
-            self.log(
-                'info',
-                'Executing clone command for org-level repo',
-            )
+            clone_cmd = f'git clone --depth 1 {remote_url} {org_repo_dir}'
 
             action = CmdRunAction(command=clone_cmd)
             obs = self.run_action(action)
@@ -780,51 +726,20 @@ fi
 
                 # Load microagents from the org-level repo
                 org_microagents_dir = org_repo_dir / 'microagents'
-                self.log(
-                    'info',
-                    f'Looking for microagents in directory: {org_microagents_dir}',
-                )
-
                 loaded_microagents = self._load_microagents_from_directory(
                     org_microagents_dir, 'org-level'
                 )
 
-                self.log(
-                    'info',
-                    f'Loaded {len(loaded_microagents)} microagents from org-level repository {org_openhands_repo}',
-                )
-
                 # Clean up the org repo directory
-                action = CmdRunAction(f'rm -rf {org_repo_dir}')
-                self.run_action(action)
+                shutil.rmtree(org_repo_dir)
             else:
-                clone_error_msg = (
-                    obs.content
-                    if isinstance(obs, CmdOutputObservation)
-                    else 'Unknown error'
-                )
-                exit_code = (
-                    obs.exit_code if isinstance(obs, CmdOutputObservation) else 'N/A'
-                )
                 self.log(
                     'info',
-                    f'No org-level microagents found at {org_openhands_repo} (exit_code: {exit_code})',
-                )
-                self.log(
-                    'debug',
-                    f'Clone command output: {clone_error_msg}',
+                    f'No org-level microagents found at {org_openhands_repo}',
                 )
 
-        except AuthenticationError as e:
-            self.log(
-                'debug',
-                f'org-level microagent directory {org_openhands_repo} not found: {str(e)}',
-            )
         except Exception as e:
-            self.log(
-                'debug',
-                f'Error loading org-level microagents from {org_openhands_repo}: {str(e)}',
-            )
+            self.log('error', f'Error loading org-level microagents: {str(e)}')
 
         return loaded_microagents
 
@@ -835,13 +750,9 @@ fi
         If selected_repository is None, load microagents from the current workspace.
         This is the main entry point for loading microagents.
 
-        This method also checks for user/org level microagents stored in a repository.
+        This method also checks for user/org level microagents stored in a .openhands repository.
         For example, if the repository is github.com/acme-co/api, it will also check for
         github.com/acme-co/.openhands and load microagents from there if it exists.
-
-        For GitLab repositories, it will use openhands-config instead of .openhands
-        since GitLab doesn't support repository names starting with non-alphanumeric
-        characters.
         """
         loaded_microagents: list[BaseMicroagent] = []
         microagents_dir = self.workspace_root / '.openhands' / 'microagents'
@@ -871,7 +782,7 @@ fi
             # If the instructions file is not found in the workspace root, try to load it from the repo root
             self.log(
                 'debug',
-                f'.openhands_instructions not present, trying to load from repository microagents_dir={microagents_dir}',
+                f'.openhands_instructions not present, trying to load from repository {microagents_dir=}',
             )
             obs = self.read(
                 FileReadAction(path=str(repo_root / '.openhands_instructions'))
@@ -903,58 +814,6 @@ fi
         if not action.runnable:
             if isinstance(action, AgentThinkAction):
                 return AgentThinkObservation('Your thought has been logged.')
-            elif isinstance(action, TaskTrackingAction):
-                # Get the session-specific task file path
-                conversation_dir = get_conversation_dir(
-                    self.sid, self.event_stream.user_id
-                )
-                task_file_path = f'{conversation_dir}TASKS.md'
-
-                if action.command == 'plan':
-                    # Write the serialized task list to the session directory
-                    content = '# Task List\n\n'
-                    for i, task in enumerate(action.task_list, 1):
-                        status_icon = {
-                            'todo': '⏳',
-                            'in_progress': '🔄',
-                            'done': '✅',
-                        }.get(task.get('status', 'todo'), '⏳')
-                        content += f'{i}. {status_icon} {task.get("title", "")}\n{task.get("notes", "")}\n'
-
-                    try:
-                        self.event_stream.file_store.write(task_file_path, content)
-                        return TaskTrackingObservation(
-                            content=f'Task list has been updated with {len(action.task_list)} items. Stored in session directory: {task_file_path}',
-                            command=action.command,
-                            task_list=action.task_list,
-                        )
-                    except Exception as e:
-                        return ErrorObservation(
-                            f'Failed to write task list to session directory {task_file_path}: {str(e)}'
-                        )
-
-                elif action.command == 'view':
-                    # Read the TASKS.md file from the session directory
-                    try:
-                        content = self.event_stream.file_store.read(task_file_path)
-                        return TaskTrackingObservation(
-                            content=content,
-                            command=action.command,
-                            task_list=[],  # Empty for view command
-                        )
-                    except FileNotFoundError:
-                        return TaskTrackingObservation(
-                            command=action.command,
-                            task_list=[],
-                            content='No task list found. Use the "plan" command to create one.',
-                        )
-                    except Exception as e:
-                        return TaskTrackingObservation(
-                            command=action.command,
-                            task_list=[],
-                            content=f'Failed to read the task list from session directory {task_file_path}. Error: {str(e)}',
-                        )
-
             return NullObservation('')
         if (
             hasattr(action, 'confirmation_state')
@@ -992,42 +851,6 @@ fi
     @abstractmethod
     async def connect(self) -> None:
         pass
-
-    def _setup_git_config(self) -> None:
-        """Configure git user settings during initial environment setup.
-
-        This method is called automatically during setup_initial_env() to ensure
-        git configuration is applied to the runtime environment.
-        """
-        # Get git configuration from config
-        git_user_name = self.config.git_user_name
-        git_user_email = self.config.git_user_email
-
-        # Skip git configuration for CLI runtime to preserve user's local git settings
-        is_cli_runtime = self.config.runtime == 'cli'
-        if is_cli_runtime:
-            logger.debug(
-                "Skipping git configuration for CLI runtime - using user's local git config"
-            )
-            return
-
-        # All runtimes (except CLI) use global git config
-        cmd = f'git config --global user.name "{git_user_name}" && git config --global user.email "{git_user_email}"'
-
-        # Execute git configuration command
-        try:
-            action = CmdRunAction(command=cmd)
-            obs = self.run(action)
-            if isinstance(obs, CmdOutputObservation) and obs.exit_code != 0:
-                logger.warning(
-                    f'Git config command failed: {cmd}, error: {obs.content}'
-                )
-            else:
-                logger.info(
-                    f'Successfully configured git: name={git_user_name}, email={git_user_email}'
-                )
-        except Exception as e:
-            logger.warning(f'Failed to execute git config command: {cmd}, error: {e}')
 
     @abstractmethod
     def get_mcp_config(
@@ -1123,10 +946,10 @@ fi
     def _execute_shell_fn_git_handler(
         self, command: str, cwd: str | None
     ) -> CommandResult:
-        """This function is used by the GitHandler to execute shell commands."""
-        obs = self.run(
-            CmdRunAction(command=command, is_static=True, hidden=True, cwd=cwd)
-        )
+        """
+        This function is used by the GitHandler to execute shell commands.
+        """
+        obs = self.run(CmdRunAction(command=command, is_static=True, cwd=cwd))
         exit_code = 0
         content = ''
 
@@ -1140,42 +963,13 @@ fi
 
         return CommandResult(content=content, exit_code=exit_code)
 
-    def _create_file_fn_git_handler(self, path: str, content: str) -> int:
-        """This function is used by the GitHandler to execute shell commands."""
-        obs = self.write(FileWriteAction(path=path, content=content))
-        if isinstance(obs, ErrorObservation):
-            return -1
-        return 0
-
     def get_git_changes(self, cwd: str) -> list[dict[str, str]] | None:
         self.git_handler.set_cwd(cwd)
-        changes = self.git_handler.get_git_changes()
-        return changes
+        return self.git_handler.get_git_changes()
 
     def get_git_diff(self, file_path: str, cwd: str) -> dict[str, str]:
         self.git_handler.set_cwd(cwd)
         return self.git_handler.get_git_diff(file_path)
-
-    def get_workspace_branch(self, primary_repo_path: str | None = None) -> str | None:
-        """
-        Get the current branch of the workspace.
-
-        Args:
-            primary_repo_path: Path to the primary repository within the workspace.
-                              If None, uses the workspace root.
-
-        Returns:
-            str | None: The current branch name, or None if not a git repository or error occurs.
-        """
-        if primary_repo_path:
-            # Use the primary repository path
-            git_cwd = str(self.workspace_root / primary_repo_path)
-        else:
-            # Use the workspace root
-            git_cwd = str(self.workspace_root)
-
-        self.git_handler.set_cwd(git_cwd)
-        return self.git_handler.get_current_branch()
 
     @property
     def additional_agent_instructions(self) -> str:
@@ -1184,7 +978,8 @@ fi
     def subscribe_to_shell_stream(
         self, callback: Callable[[str], None] | None = None
     ) -> bool:
-        """Subscribe to shell command output stream.
+        """
+        Subscribe to shell command output stream.
         This method is meant to be overridden by runtime implementations
         that want to stream shell command output to external consumers.
 
@@ -1195,11 +990,3 @@ fi
         Returns False by default.
         """
         return False
-
-    @classmethod
-    def setup(cls, config: OpenHandsConfig, headless_mode: bool = False):
-        """Set up the environment for runtimes to be created."""
-
-    @classmethod
-    def teardown(cls, config: OpenHandsConfig):
-        """Tear down the environment in which runtimes are created."""
