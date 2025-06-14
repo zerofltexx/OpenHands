@@ -128,7 +128,9 @@ class CreateMicroagent(BaseModel):
 
 
 class User(BaseModel):
-    id: str
+    id: (
+        int | str
+    )  # Support both integer IDs (GitHub/GitLab) and string UUIDs (Azure DevOps)
     login: str
     avatar_url: str
     company: str | None = None
