@@ -187,7 +187,6 @@ class MCPStdioServerConfig(BaseModel):
             and set(self.env.items()) == set(other.env.items())
         )
 
-
 class MCPSHTTPServerConfig(BaseModel):
     """Configuration for a MCP server that uses SHTTP.
 
