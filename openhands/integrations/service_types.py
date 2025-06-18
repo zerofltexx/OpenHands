@@ -13,6 +13,7 @@ from openhands.server.types import AppMode
 class ProviderType(Enum):
     GITHUB = 'github'
     GITLAB = 'gitlab'
+    BITBUCKET = 'bitbucket'
     AZURE_DEVOPS = 'azure_devops'
 
 
@@ -50,6 +51,16 @@ class SuggestedTask(BaseModel):
                 'tokenEnvVar': 'GITHUB_TOKEN',
                 'ciSystem': 'GitHub Actions',
                 'ciProvider': 'GitHub',
+                'requestVerb': 'pull request',
+            }
+        elif self.git_provider == ProviderType.BITBUCKET:
+            return {
+                'requestType': 'Pull Request',
+                'requestTypeShort': 'PR',
+                'apiName': 'Bitbucket API',
+                'tokenEnvVar': 'BITBUCKET_TOKEN',
+                'ciSystem': 'Bitbucket Pipelines',
+                'ciProvider': 'Bitbucket',
                 'requestVerb': 'pull request',
             }
         elif self.git_provider == ProviderType.AZURE_DEVOPS:
@@ -99,7 +110,7 @@ class SuggestedTask(BaseModel):
 class User(BaseModel):
     id: (
         int | str
-    )  # Support both integer IDs (GitHub/GitLab) and string UUIDs (Azure DevOps)
+    )  # Support both integer IDs (GitHub/GitLab) and string UUIDs (Azure DevOps/Bitbucket)
     login: str
     avatar_url: str
     company: str | None = None
@@ -117,7 +128,7 @@ class Branch(BaseModel):
 class Repository(BaseModel):
     id: (
         int | str
-    )  # Support both integer IDs (GitHub/GitLab) and string UUIDs (Azure DevOps)
+    )  # Support both integer IDs (GitHub/GitLab) and string UUIDs (Azure DevOps/Bitbucket)
     full_name: str
     git_provider: ProviderType
     is_public: bool

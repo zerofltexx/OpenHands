@@ -50,7 +50,6 @@ AGENT_CLASS = 'CodeActAgent'
 
 class IssueResolver:
     GITLAB_CI = os.getenv('GITLAB_CI') == 'true'
-    AZURE_DEVOPS_CI = os.getenv('TF_BUILD') == 'True'
 
     def __init__(self, args: Namespace) -> None:
         """Initialize the IssueResolver with the given parameters.
@@ -81,7 +80,7 @@ class IssueResolver:
             args.token
             or os.getenv('GITHUB_TOKEN')
             or os.getenv('GITLAB_TOKEN')
-            or os.getenv('AZURE_DEVOPS_TOKEN')
+            or os.getenv('BITBUCKET_TOKEN')
         )
         username = args.username if args.username else os.getenv('GIT_USERNAME')
         if not username:
@@ -130,7 +129,7 @@ class IssueResolver:
                 if platform == ProviderType.GITHUB
                 else 'gitlab.com'
                 if platform == ProviderType.GITLAB
-                else 'dev.azure.com'
+                else 'bitbucket.org'
             )
 
         self.output_dir = args.output_dir
@@ -250,14 +249,6 @@ class IssueResolver:
             if user_id == 0:
                 sandbox_config.user_id = get_unique_uid()
 
-        # Configure sandbox for Azure DevOps CI environment
-        if cls.AZURE_DEVOPS_CI:
-            sandbox_config.use_host_network = False
-            sandbox_config.enable_auto_lint = True
-            sandbox_config.runtime_startup_env_vars = {
-                'TF_BUILD': 'True',
-            }
-
         openhands_config.sandbox.base_container_image = (
             sandbox_config.base_container_image
         )
@@ -291,9 +282,7 @@ class IssueResolver:
         if not isinstance(obs, CmdOutputObservation) or obs.exit_code != 0:
             raise RuntimeError(f'Failed to change directory to /workspace.\n{obs}')
 
-        if (self.platform == ProviderType.GITLAB and self.GITLAB_CI) or (
-            self.platform == ProviderType.AZURE_DEVOPS and self.AZURE_DEVOPS_CI
-        ):
+        if self.platform == ProviderType.GITLAB and self.GITLAB_CI:
             action = CmdRunAction(command='sudo chown -R 1001:0 /workspace/*')
             logger.info(action, extra={'msg_type': 'ACTION'})
             obs = runtime.run_action(action)
@@ -355,9 +344,7 @@ class IssueResolver:
         if not isinstance(obs, CmdOutputObservation) or obs.exit_code != 0:
             raise RuntimeError(f'Failed to set git config. Observation: {obs}')
 
-        if (self.platform == ProviderType.GITLAB and self.GITLAB_CI) or (
-            self.platform == ProviderType.AZURE_DEVOPS and self.AZURE_DEVOPS_CI
-        ):
+        if self.platform == ProviderType.GITLAB and self.GITLAB_CI:
             action = CmdRunAction(command='sudo git add -A')
         else:
             action = CmdRunAction(command='git add -A')

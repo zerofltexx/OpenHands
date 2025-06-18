@@ -17,6 +17,7 @@ from openhands.events.stream import EventStream
 from openhands.integrations.azure_devops.azure_devops_service import (
     AzureDevOpsServiceImpl,
 )
+from openhands.integrations.bitbucket.bitbucket_service import BitbucketService
 from openhands.integrations.github.github_service import GithubServiceImpl
 from openhands.integrations.gitlab.gitlab_service import GitLabServiceImpl
 from openhands.integrations.service_types import (
@@ -113,6 +114,7 @@ class ProviderHandler:
         self.service_class_map: dict[ProviderType, type[GitService]] = {
             ProviderType.GITHUB: GithubServiceImpl,
             ProviderType.GITLAB: GitLabServiceImpl,
+            ProviderType.BITBUCKET: BitbucketService,
             ProviderType.AZURE_DEVOPS: AzureDevOpsServiceImpl,
         }
 
