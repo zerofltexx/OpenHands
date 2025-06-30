@@ -73,11 +73,13 @@ class IssueHandlerFactory:
                 # Parse owner as organization/project
                 parts = self.owner.split('/')
                 if len(parts) < 2:
-                    raise ValueError(f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project')
-                
+                    raise ValueError(
+                        f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project'
+                    )
+
                 organization = parts[0]
                 project = parts[1]
-                
+
                 return ServiceContextIssue(
                     AzureDevOpsIssueHandler(
                         self.token,
@@ -127,11 +129,13 @@ class IssueHandlerFactory:
                 # Parse owner as organization/project
                 parts = self.owner.split('/')
                 if len(parts) < 2:
-                    raise ValueError(f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project')
-                
+                    raise ValueError(
+                        f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project'
+                    )
+
                 organization = parts[0]
                 project = parts[1]
-                
+
                 # For now, use the same handler for both issues and PRs
                 return ServiceContextPR(
                     AzureDevOpsIssueHandler(

@@ -52,9 +52,7 @@ export function AzureDevOpsTokenInput({
           name="azure-devops-host-input"
           type="text"
           placeholder={
-            azureDevOpsHostSet
-              ? azureDevOpsHostSet
-              : t(I18nKey.GIT$AZURE_DEVOPS_HOST_PLACEHOLDER)
+            azureDevOpsHostSet || t(I18nKey.GIT$AZURE_DEVOPS_HOST_PLACEHOLDER)
           }
           onChange={(e) => onAzureDevOpsHostChange(e.target.value)}
         />
