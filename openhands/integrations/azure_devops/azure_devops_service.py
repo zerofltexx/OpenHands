@@ -1,4 +1,3 @@
-import os
 from typing import Any
 
 import httpx
@@ -13,11 +12,9 @@ from openhands.integrations.service_types import (
     RequestMethod,
     SuggestedTask,
     TaskType,
-    UnknownException,
     User,
 )
 from openhands.server.types import AppMode
-from openhands.utils.import_utils import get_impl
 
 
 class AzureDevOpsService(BaseGitService, GitService):
@@ -68,7 +65,7 @@ class AzureDevOpsService(BaseGitService, GitService):
     @property
     def base_url(self) -> str:
         """Get the base URL for Azure DevOps API calls."""
-        return f"https://dev.azure.com/{self.organization}"
+        return f'https://dev.azure.com/{self.organization}'
 
     async def _get_azure_devops_headers(self) -> dict[str, Any]:
         """
@@ -82,8 +79,11 @@ class AzureDevOpsService(BaseGitService, GitService):
         # Azure DevOps uses Basic authentication with PAT
         # The username is ignored (empty string), and the password is the PAT
         import base64
-        auth_str = base64.b64encode(f":{self.token.get_secret_value()}".encode()).decode()
-        
+
+        auth_str = base64.b64encode(
+            f':{self.token.get_secret_value()}'.encode()
+        ).decode()
+
         return {
             'Authorization': f'Basic {auth_str}',
             'Content-Type': 'application/json',
@@ -141,12 +141,12 @@ class AzureDevOpsService(BaseGitService, GitService):
 
     async def get_user(self) -> User:
         """Get the authenticated user's information."""
-        url = f"{self.base_url}/_apis/profile/profiles/me?api-version=7.1-preview.1"
+        url = f'{self.base_url}/_apis/profile/profiles/me?api-version=7.1-preview.1'
         response, _ = await self._make_request(url)
 
         # Get additional user details
         user_id = response.get('id', '')
-        url = f"{self.base_url}/_apis/graph/users/{user_id}?api-version=7.1-preview.1"
+        url = f'{self.base_url}/_apis/graph/users/{user_id}?api-version=7.1-preview.1'
         user_details, _ = await self._make_request(url)
 
         return User(
@@ -164,25 +164,29 @@ class AzureDevOpsService(BaseGitService, GitService):
         """Search for repositories in Azure DevOps."""
         if not self.project:
             # If no project is specified, get all repositories across all projects
-            url = f"{self.base_url}/_apis/git/repositories?api-version=7.1"
+            url = f'{self.base_url}/_apis/git/repositories?api-version=7.1'
         else:
             # Get repositories for a specific project
-            url = f"{self.base_url}/{self.project}/_apis/git/repositories?api-version=7.1"
+            url = (
+                f'{self.base_url}/{self.project}/_apis/git/repositories?api-version=7.1'
+            )
 
         response, _ = await self._make_request(url)
-        
+
         # Filter repositories by query if provided
         repos = response.get('value', [])
         if query:
-            repos = [repo for repo in repos if query.lower() in repo.get('name', '').lower()]
-        
+            repos = [
+                repo for repo in repos if query.lower() in repo.get('name', '').lower()
+            ]
+
         # Limit to per_page
         repos = repos[:per_page]
-        
+
         return [
             Repository(
                 id=str(repo.get('id')),
-                full_name=f"{self.organization}/{repo.get('project', {}).get('name', '')}/{repo.get('name')}",
+                full_name=f'{self.organization}/{repo.get("project", {}).get("name", "")}/{repo.get("name")}',
                 git_provider=ProviderType.AZURE_DEVOPS,
                 is_public=False,  # Azure DevOps repos are private by default
             )
@@ -192,45 +196,49 @@ class AzureDevOpsService(BaseGitService, GitService):
     async def get_repositories(self, sort: str, app_mode: AppMode) -> list[Repository]:
         """Get repositories for the authenticated user."""
         MAX_REPOS = 1000
-        
+
         # Get all projects first
-        projects_url = f"{self.base_url}/_apis/projects?api-version=7.1"
+        projects_url = f'{self.base_url}/_apis/projects?api-version=7.1'
         projects_response, _ = await self._make_request(projects_url)
         projects = projects_response.get('value', [])
-        
+
         all_repos = []
-        
+
         # For each project, get its repositories
         for project in projects:
             project_name = project.get('name')
-            repos_url = f"{self.base_url}/{project_name}/_apis/git/repositories?api-version=7.1"
+            repos_url = (
+                f'{self.base_url}/{project_name}/_apis/git/repositories?api-version=7.1'
+            )
             repos_response, _ = await self._make_request(repos_url)
             repos = repos_response.get('value', [])
-            
+
             for repo in repos:
-                all_repos.append({
-                    'id': repo.get('id'),
-                    'name': repo.get('name'),
-                    'project_name': project_name,
-                    'updated_date': repo.get('lastUpdateTime'),
-                })
-                
+                all_repos.append(
+                    {
+                        'id': repo.get('id'),
+                        'name': repo.get('name'),
+                        'project_name': project_name,
+                        'updated_date': repo.get('lastUpdateTime'),
+                    }
+                )
+
                 if len(all_repos) >= MAX_REPOS:
                     break
-            
+
             if len(all_repos) >= MAX_REPOS:
                 break
-        
+
         # Sort repositories based on the sort parameter
         if sort == 'updated':
             all_repos.sort(key=lambda r: r.get('updated_date', ''), reverse=True)
         elif sort == 'name':
             all_repos.sort(key=lambda r: r.get('name', '').lower())
-        
+
         return [
             Repository(
                 id=str(repo.get('id')),
-                full_name=f"{self.organization}/{repo.get('project_name')}/{repo.get('name')}",
+                full_name=f'{self.organization}/{repo.get("project_name")}/{repo.get("name")}',
                 git_provider=ProviderType.AZURE_DEVOPS,
                 is_public=False,  # Azure DevOps repos are private by default
             )
@@ -241,29 +249,29 @@ class AzureDevOpsService(BaseGitService, GitService):
         """Get suggested tasks for the authenticated user across all repositories."""
         if not self.project:
             return []  # Need a project to get pull requests
-        
+
         # Get user info
         user = await self.get_user()
-        
+
         # Get pull requests created by the user
-        url = f"{self.base_url}/{self.project}/_apis/git/pullrequests?api-version=7.1&searchCriteria.creatorId={user.id}&searchCriteria.status=active"
+        url = f'{self.base_url}/{self.project}/_apis/git/pullrequests?api-version=7.1&searchCriteria.creatorId={user.id}&searchCriteria.status=active'
         response, _ = await self._make_request(url)
-        
+
         pull_requests = response.get('value', [])
         tasks = []
-        
+
         for pr in pull_requests:
             repo_name = pr.get('repository', {}).get('name', '')
             pr_id = pr.get('pullRequestId')
             title = pr.get('title', '')
-            
+
             # Check for merge conflicts
             if pr.get('mergeStatus') == 'conflicts':
                 tasks.append(
                     SuggestedTask(
                         git_provider=ProviderType.AZURE_DEVOPS,
                         task_type=TaskType.MERGE_CONFLICTS,
-                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        repo=f'{self.organization}/{self.project}/{repo_name}',
                         issue_number=pr_id,
                         title=title,
                     )
@@ -274,7 +282,7 @@ class AzureDevOpsService(BaseGitService, GitService):
                     SuggestedTask(
                         git_provider=ProviderType.AZURE_DEVOPS,
                         task_type=TaskType.FAILING_CHECKS,
-                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        repo=f'{self.organization}/{self.project}/{repo_name}',
                         issue_number=pr_id,
                         title=title,
                     )
@@ -285,44 +293,44 @@ class AzureDevOpsService(BaseGitService, GitService):
                     SuggestedTask(
                         git_provider=ProviderType.AZURE_DEVOPS,
                         task_type=TaskType.UNRESOLVED_COMMENTS,
-                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        repo=f'{self.organization}/{self.project}/{repo_name}',
                         issue_number=pr_id,
                         title=title,
                     )
                 )
-        
+
         # Get work items assigned to the user
-        work_items_url = f"{self.base_url}/{self.project}/_apis/wit/wiql?api-version=7.1"
-        wiql_query = {
-            "query": f"SELECT [System.Id], [System.Title], [System.State] FROM WorkItems WHERE [System.AssignedTo] = @me AND [System.State] = 'Active'"
-        }
-        
-        work_items_response, _ = await self._make_request(
-            url=work_items_url, 
-            params=wiql_query, 
-            method=RequestMethod.POST
+        work_items_url = (
+            f'{self.base_url}/{self.project}/_apis/wit/wiql?api-version=7.1'
         )
-        
+        wiql_query = {
+            'query': "SELECT [System.Id], [System.Title], [System.State] FROM WorkItems WHERE [System.AssignedTo] = @me AND [System.State] = 'Active'"
+        }
+
+        work_items_response, _ = await self._make_request(
+            url=work_items_url, params=wiql_query, method=RequestMethod.POST
+        )
+
         work_item_references = work_items_response.get('workItems', [])
-        
+
         # Get details for each work item
         for work_item_ref in work_item_references:
             work_item_id = work_item_ref.get('id')
-            work_item_url = f"{self.base_url}/{self.project}/_apis/wit/workitems/{work_item_id}?api-version=7.1"
+            work_item_url = f'{self.base_url}/{self.project}/_apis/wit/workitems/{work_item_id}?api-version=7.1'
             work_item, _ = await self._make_request(work_item_url)
-            
+
             title = work_item.get('fields', {}).get('System.Title', '')
-            
+
             tasks.append(
                 SuggestedTask(
                     git_provider=ProviderType.AZURE_DEVOPS,
                     task_type=TaskType.OPEN_ISSUE,
-                    repo=f"{self.organization}/{self.project}",
+                    repo=f'{self.organization}/{self.project}',
                     issue_number=work_item_id,
                     title=title,
                 )
             )
-        
+
         return tasks
 
     async def get_repository_details_from_repo_name(
@@ -332,18 +340,20 @@ class AzureDevOpsService(BaseGitService, GitService):
         # Parse repository string: organization/project/repo
         parts = repository.split('/')
         if len(parts) < 3:
-            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
-        
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+
         org = parts[0]
         project = parts[1]
         repo_name = parts[2]
-        
-        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.1"
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.1'
         repo, _ = await self._make_request(url)
-        
+
         return Repository(
             id=str(repo.get('id')),
-            full_name=f"{org}/{project}/{repo.get('name')}",
+            full_name=f'{org}/{project}/{repo.get("name")}',
             git_provider=ProviderType.AZURE_DEVOPS,
             is_public=False,  # Azure DevOps repos are private by default
         )
@@ -353,36 +363,38 @@ class AzureDevOpsService(BaseGitService, GitService):
         # Parse repository string: organization/project/repo
         parts = repository.split('/')
         if len(parts) < 3:
-            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
-        
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+
         org = parts[0]
         project = parts[1]
         repo_name = parts[2]
-        
-        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/refs?api-version=7.1&filter=heads/"
-        
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/refs?api-version=7.1&filter=heads/'
+
         # Set maximum branches to fetch
         MAX_BRANCHES = 1000
-        
+
         response, _ = await self._make_request(url)
         branches_data = response.get('value', [])
-        
+
         all_branches = []
-        
+
         for branch_data in branches_data:
             # Extract branch name from the ref (e.g., "refs/heads/main" -> "main")
             name = branch_data.get('name', '').replace('refs/heads/', '')
-            
+
             # Get the commit details for this branch
             object_id = branch_data.get('objectId', '')
-            commit_url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{object_id}?api-version=7.1"
+            commit_url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{object_id}?api-version=7.1'
             commit_data, _ = await self._make_request(commit_url)
-            
+
             # Check if the branch is protected
-            policy_url = f"https://dev.azure.com/{org}/{project}/_apis/git/policy/configurations?api-version=7.1&repositoryId={repo_name}&refName=refs/heads/{name}"
+            policy_url = f'https://dev.azure.com/{org}/{project}/_apis/git/policy/configurations?api-version=7.1&repositoryId={repo_name}&refName=refs/heads/{name}'
             policy_data, _ = await self._make_request(policy_url)
             is_protected = len(policy_data.get('value', [])) > 0
-            
+
             branch = Branch(
                 name=name,
                 commit_sha=object_id,
@@ -390,10 +402,10 @@ class AzureDevOpsService(BaseGitService, GitService):
                 last_push_date=commit_data.get('committer', {}).get('date'),
             )
             all_branches.append(branch)
-            
+
             if len(all_branches) >= MAX_BRANCHES:
                 break
-        
+
         return all_branches
 
     async def create_pr(
@@ -409,26 +421,30 @@ class AzureDevOpsService(BaseGitService, GitService):
         # Parse repository string: organization/project/repo
         parts = repository.split('/')
         if len(parts) < 3:
-            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
-        
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+
         org = parts[0]
         project = parts[1]
         repo_name = parts[2]
-        
-        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?api-version=7.1"
-        
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?api-version=7.1'
+
         data = {
-            "sourceRefName": f"refs/heads/{source_branch}",
-            "targetRefName": f"refs/heads/{target_branch}",
-            "title": title,
-            "description": description or "",
-            "isDraft": draft,
+            'sourceRefName': f'refs/heads/{source_branch}',
+            'targetRefName': f'refs/heads/{target_branch}',
+            'title': title,
+            'description': description or '',
+            'isDraft': draft,
         }
-        
-        response, _ = await self._make_request(url=url, params=data, method=RequestMethod.POST)
-        
+
+        response, _ = await self._make_request(
+            url=url, params=data, method=RequestMethod.POST
+        )
+
         return {
-            "id": response.get('pullRequestId'),
-            "number": response.get('pullRequestId'),
-            "url": response.get('url'),
+            'id': response.get('pullRequestId'),
+            'number': response.get('pullRequestId'),
+            'url': response.get('url'),
         }

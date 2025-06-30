@@ -212,7 +212,10 @@ function GitSettingsScreen() {
               type="submit"
               variant="secondary"
               isDisabled={
-                !isGitHubTokenSet && !isGitLabTokenSet && !isBitbucketTokenSet && !isAzureDevOpsTokenSet
+                !isGitHubTokenSet &&
+                !isGitLabTokenSet &&
+                !isBitbucketTokenSet &&
+                !isAzureDevOpsTokenSet
               }
             >
               {t(I18nKey.GIT$DISCONNECT_TOKENS)}
