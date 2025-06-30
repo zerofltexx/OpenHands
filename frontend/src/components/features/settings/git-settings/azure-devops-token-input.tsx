@@ -1,64 +1,64 @@
+import React from "react";
 import { useTranslation } from "react-i18next";
 import { I18nKey } from "#/i18n/declaration";
-import { SettingsInput } from "../settings-input";
+import { BrandInput } from "../../brand-input";
+import { BrandLabel } from "../../brand-label";
 import { AzureDevOpsTokenHelpAnchor } from "./azure-devops-token-help-anchor";
-import { KeyStatusIcon } from "../key-status-icon";
 
-interface AzureDevOpsTokenInputProps {
+type AzureDevOpsTokenInputProps = {
+  name: string;
+  isAzureDevOpsTokenSet: boolean;
   onChange: (value: string) => void;
   onAzureDevOpsHostChange: (value: string) => void;
-  isAzureDevOpsTokenSet: boolean;
-  name: string;
-  azureDevOpsHostSet: string | null | undefined;
-}
+  azureDevOpsHostSet: string | null;
+};
 
 export function AzureDevOpsTokenInput({
+  name,
+  isAzureDevOpsTokenSet,
   onChange,
   onAzureDevOpsHostChange,
-  isAzureDevOpsTokenSet,
-  name,
   azureDevOpsHostSet,
 }: AzureDevOpsTokenInputProps) {
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-col gap-6">
-      <SettingsInput
-        testId={name}
-        name={name}
-        onChange={onChange}
-        label={t(I18nKey.AZURE_DEVOPS$TOKEN_LABEL)}
-        type="password"
-        className="w-[680px]"
-        placeholder={isAzureDevOpsTokenSet ? "<hidden>" : ""}
-        startContent={
-          isAzureDevOpsTokenSet && (
-            <KeyStatusIcon
-              testId="ado-set-token-indicator"
-              isSet={isAzureDevOpsTokenSet}
-            />
-          )
-        }
-      />
-
-      <SettingsInput
-        onChange={onAzureDevOpsHostChange || (() => {})}
-        name="azure-devops-host-input"
-        testId="azure-devops-host-input"
-        label={t(I18nKey.AZURE_DEVOPS$HOST_LABEL)}
-        type="text"
-        className="w-[680px]"
-        placeholder="https://dev.azure.com/{your-org-name}"
-        defaultValue={azureDevOpsHostSet || undefined}
-        startContent={
-          azureDevOpsHostSet &&
-          azureDevOpsHostSet.trim() !== "" && (
-            <KeyStatusIcon testId="ado-set-host-indicator" isSet />
-          )
-        }
-      />
-
-      <AzureDevOpsTokenHelpAnchor />
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-row gap-2 items-center">
+          <BrandLabel htmlFor={name}>
+            {t(I18nKey.GIT$AZURE_DEVOPS_TOKEN)}
+          </BrandLabel>
+          <AzureDevOpsTokenHelpAnchor />
+        </div>
+        <BrandInput
+          id={name}
+          name={name}
+          type="password"
+          placeholder={
+            isAzureDevOpsTokenSet
+              ? t(I18nKey.GIT$TOKEN_PLACEHOLDER_SET)
+              : t(I18nKey.GIT$TOKEN_PLACEHOLDER_UNSET)
+          }
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <BrandLabel htmlFor="azure-devops-host-input">
+          {t(I18nKey.GIT$AZURE_DEVOPS_HOST)}
+        </BrandLabel>
+        <BrandInput
+          id="azure-devops-host-input"
+          name="azure-devops-host-input"
+          type="text"
+          placeholder={
+            azureDevOpsHostSet
+              ? azureDevOpsHostSet
+              : t(I18nKey.GIT$AZURE_DEVOPS_HOST_PLACEHOLDER)
+          }
+          onChange={(e) => onAzureDevOpsHostChange(e.target.value)}
+        />
+      </div>
     </div>
   );
 }

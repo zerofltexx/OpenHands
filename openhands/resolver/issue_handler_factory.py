@@ -1,9 +1,6 @@
 from openhands.core.config import LLMConfig
 from openhands.integrations.provider import ProviderType
-from openhands.resolver.interfaces.azure_devops import (
-    AzureDevOpsIssueHandler,
-    AzureDevOpsPRHandler,
-)
+from openhands.resolver.interfaces.azure_devops import AzureDevOpsIssueHandler
 from openhands.resolver.interfaces.bitbucket import (
     BitbucketIssueHandler,
     BitbucketPRHandler,
@@ -73,13 +70,20 @@ class IssueHandlerFactory:
                     self.llm_config,
                 )
             elif self.platform == ProviderType.AZURE_DEVOPS:
+                # Parse owner as organization/project
+                parts = self.owner.split('/')
+                if len(parts) < 2:
+                    raise ValueError(f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project')
+                
+                organization = parts[0]
+                project = parts[1]
+                
                 return ServiceContextIssue(
                     AzureDevOpsIssueHandler(
-                        self.owner,
-                        self.repo,
                         self.token,
-                        self.username,
-                        self.base_domain,
+                        organization,
+                        project,
+                        self.repo,
                     ),
                     self.llm_config,
                 )
@@ -120,13 +124,21 @@ class IssueHandlerFactory:
                     self.llm_config,
                 )
             elif self.platform == ProviderType.AZURE_DEVOPS:
+                # Parse owner as organization/project
+                parts = self.owner.split('/')
+                if len(parts) < 2:
+                    raise ValueError(f'Invalid Azure DevOps owner format: {self.owner}. Expected format: organization/project')
+                
+                organization = parts[0]
+                project = parts[1]
+                
+                # For now, use the same handler for both issues and PRs
                 return ServiceContextPR(
-                    AzureDevOpsPRHandler(
-                        self.owner,
-                        self.repo,
+                    AzureDevOpsIssueHandler(
                         self.token,
-                        self.username,
-                        self.base_domain,
+                        organization,
+                        project,
+                        self.repo,
                     ),
                     self.llm_config,
                 )

@@ -1,18 +1,13 @@
-"""Azure DevOps service implementation using standard HTTP API calls."""
-
-from __future__ import annotations
-
-import base64
+import os
 from typing import Any
 
 import httpx
 from pydantic import SecretStr
 
-from openhands.core.logger import openhands_logger as logger
 from openhands.integrations.service_types import (
-    AuthenticationError,
     BaseGitService,
     Branch,
+    GitService,
     ProviderType,
     Repository,
     RequestMethod,
@@ -22,122 +17,96 @@ from openhands.integrations.service_types import (
     User,
 )
 from openhands.server.types import AppMode
+from openhands.utils.import_utils import get_impl
 
 
-class AzureDevOpsServiceImpl(BaseGitService):
-    """Azure DevOps service implementation using standard HTTP API calls."""
+class AzureDevOpsService(BaseGitService, GitService):
+    """Default implementation of GitService for Azure DevOps integration.
+
+    This is an extension point in OpenHands that allows applications to customize Azure DevOps
+    integration behavior. Applications can substitute their own implementation by:
+    1. Creating a class that inherits from GitService
+    2. Implementing all required methods
+    3. Setting server_config.azure_devops_service_class to the fully qualified name of the class
+
+    The class is instantiated via get_impl() in openhands.server.shared.py.
+    """
+
+    token: SecretStr = SecretStr('')
+    refresh = False
+    organization: str = ''
+    project: str = ''
 
     def __init__(
         self,
         user_id: str | None = None,
-        token: SecretStr | None = None,
         external_auth_id: str | None = None,
         external_auth_token: SecretStr | None = None,
+        token: SecretStr | None = None,
         external_token_manager: bool = False,
         base_domain: str | None = None,
     ):
-        """Initialize the Azure DevOps service.
-
-        Args:
-            user_id: The user ID
-            token: The Azure DevOps personal access token
-            external_auth_id: External auth ID (not used for Azure DevOps)
-            external_auth_token: External auth token (not used for Azure DevOps)
-            external_token_manager: Whether to use external token manager (not used for Azure DevOps)
-            base_domain: The Azure DevOps organization URL (e.g., https://dev.azure.com/organization)
-        """
         self.user_id = user_id
-        self.token = token
-        self.external_auth_id = external_auth_id
-        self.external_auth_token = external_auth_token
         self.external_token_manager = external_token_manager
-        self.organization_url = base_domain or 'https://dev.azure.com'
 
-        # Extract organization name from URL for API calls
-        if self.organization_url.startswith('https://dev.azure.com/'):
-            self.organization = self.organization_url.replace(
-                'https://dev.azure.com/', ''
-            ).rstrip('/')
-        else:
-            # Handle custom Azure DevOps Server URLs
-            self.organization = (
-                self.organization_url.split('/')[-1]
-                if '/' in self.organization_url
-                else self.organization_url
-            )
+        if token:
+            self.token = token
 
-        self.base_url = f'https://dev.azure.com/{self.organization}/_apis'
+        if base_domain:
+            # Parse organization and project from base_domain
+            # Format expected: dev.azure.com/{organization}/{project}
+            parts = base_domain.split('/')
+            if len(parts) >= 1:
+                self.organization = parts[0]
+            if len(parts) >= 2:
+                self.project = parts[1]
 
     @property
     def provider(self) -> str:
         return ProviderType.AZURE_DEVOPS.value
 
-    async def _get_azure_devops_headers(self) -> dict[str, str]:
-        """Get headers for Azure DevOps API requests."""
-        if not self.token:
-            self.token = await self.get_latest_token()
+    @property
+    def base_url(self) -> str:
+        """Get the base URL for Azure DevOps API calls."""
+        return f"https://dev.azure.com/{self.organization}"
 
+    async def _get_azure_devops_headers(self) -> dict[str, Any]:
+        """
+        Retrieve the Azure DevOps Token to construct the headers
+        """
         if not self.token:
-            raise AuthenticationError('No Azure DevOps token provided')
+            latest_token = await self.get_latest_token()
+            if latest_token:
+                self.token = latest_token
 
         # Azure DevOps uses Basic authentication with PAT
-        # Username can be empty, password is the PAT
-        credentials = base64.b64encode(
-            f':{self.token.get_secret_value()}'.encode()
-        ).decode()
-
+        # The username is ignored (empty string), and the password is the PAT
+        import base64
+        auth_str = base64.b64encode(f":{self.token.get_secret_value()}".encode()).decode()
+        
         return {
-            'Authorization': f'Basic {credentials}',
+            'Authorization': f'Basic {auth_str}',
             'Content-Type': 'application/json',
             'Accept': 'application/json',
         }
 
     def _has_token_expired(self, status_code: int) -> bool:
-        """Check if the token has expired."""
         return status_code == 401
 
-    async def execute_request(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        headers: dict,
-        params: dict | None,
-        method: RequestMethod = RequestMethod.GET,
-    ) -> httpx.Response:
-        """Execute an HTTP request."""
-        if method == RequestMethod.GET:
-            response = await client.get(url, headers=headers, params=params)
-        elif method == RequestMethod.POST:
-            # For Azure DevOps, we need to handle the case where params contains both
-            # query parameters and JSON data. We'll use a special key to separate them.
-            json_data = params.pop('_json_data', None) if params else None
-            response = await client.post(
-                url, headers=headers, params=params, json=json_data
-            )
-        else:
-            raise ValueError(f'Unsupported HTTP method: {method}')
-
-        return response
+    async def get_latest_token(self) -> SecretStr | None:
+        return self.token
 
     async def _make_request(
         self,
         url: str,
         params: dict | None = None,
         method: RequestMethod = RequestMethod.GET,
-        json_data: dict | None = None,
     ) -> tuple[Any, dict]:
-        """Make a request to the Azure DevOps API."""
         try:
             async with httpx.AsyncClient() as client:
                 azure_devops_headers = await self._get_azure_devops_headers()
 
                 # Make initial request
-                # For POST requests, embed json_data in params using special key
-                if method == RequestMethod.POST and json_data is not None:
-                    if params is None:
-                        params = {}
-                    params['_json_data'] = json_data
-
                 response = await self.execute_request(
                     client=client,
                     url=url,
@@ -147,655 +116,319 @@ class AzureDevOpsServiceImpl(BaseGitService):
                 )
 
                 # Handle token refresh if needed
-                if self._has_token_expired(response.status_code):
-                    logger.warning('Azure DevOps token expired, attempting refresh')
-                    # For Azure DevOps, we don't have automatic token refresh
-                    # The user needs to provide a new PAT
-                    raise AuthenticationError(
-                        'Azure DevOps token expired. Please provide a new Personal Access Token.'
+                if self.refresh and self._has_token_expired(response.status_code):
+                    await self.get_latest_token()
+                    azure_devops_headers = await self._get_azure_devops_headers()
+                    response = await self.execute_request(
+                        client=client,
+                        url=url,
+                        headers=azure_devops_headers,
+                        params=params,
+                        method=method,
                     )
 
-                if response.status_code >= 400:
-                    logger.error(
-                        f'Azure DevOps API error: {response.status_code} - {response.text}'
-                    )
-                    if response.status_code == 401:
-                        raise AuthenticationError(
-                            'Authentication failed with Azure DevOps'
-                        )
-                    elif response.status_code == 403:
-                        raise AuthenticationError(
-                            'Access forbidden. Check your Azure DevOps permissions.'
-                        )
-                    elif response.status_code == 404:
-                        raise ValueError('Resource not found')
-                    else:
-                        raise UnknownException(
-                            f'Azure DevOps API error: {response.status_code}'
-                        )
+                response.raise_for_status()
+                headers = {}
+                if 'Link' in response.headers:
+                    headers['Link'] = response.headers['Link']
 
-                try:
-                    response_data = response.json()
-                except Exception:
-                    response_data = response.text
+                return response.json(), headers
 
-                return response_data, {}
-
-        except httpx.RequestError as e:
-            logger.error(f'Request error: {e}')
-            raise UnknownException(f'Request failed: {e}')
-        except Exception as e:
-            logger.error(f'Unexpected error: {e}')
-            raise UnknownException(f'Unexpected error: {e}')
-
-    async def get_latest_token(self) -> SecretStr | None:
-        """Get the latest token.
-
-        Returns:
-            The latest token
-        """
-        return self.token
+        except httpx.HTTPStatusError as e:
+            raise self.handle_http_status_error(e)
+        except httpx.HTTPError as e:
+            raise self.handle_http_error(e)
 
     async def get_user(self) -> User:
-        """Get the authenticated user.
+        """Get the authenticated user's information."""
+        url = f"{self.base_url}/_apis/profile/profiles/me?api-version=7.1-preview.1"
+        response, _ = await self._make_request(url)
 
-        Returns:
-            The authenticated user
-        """
-        try:
-            # Try to get user profile from Azure DevOps
-            # For organization-scoped tokens, we'll use the projects API to verify authentication
-            # since the global profile API requires "All accessible organizations" scope
+        # Get additional user details
+        user_id = response.get('id', '')
+        url = f"{self.base_url}/_apis/graph/users/{user_id}?api-version=7.1-preview.1"
+        user_details, _ = await self._make_request(url)
 
-            # Fallback: Try to get projects to verify authentication
-            projects_url = f'{self.base_url}/projects'
-            projects_params = {'api-version': '7.1-preview.4'}
-
-            projects_data, _ = await self._make_request(
-                projects_url, params=projects_params
-            )
-
-            # If we can get projects, authentication is working
-            if projects_data:
-                # Try to get connection data for more user info
-                try:
-                    connection_url = f'{self.base_url}/connectionData'
-                    connection_params = {'api-version': '7.1-preview.1'}
-                    connection_data, _ = await self._make_request(
-                        connection_url, params=connection_params
-                    )
-
-                    if connection_data and isinstance(connection_data, dict):
-                        auth_user = connection_data.get('authenticatedUser', {})
-                        return User(
-                            id=auth_user.get('id', 0),
-                            login=auth_user.get(
-                                'uniqueName', self.user_id or 'azure_devops_user'
-                            ),
-                            avatar_url=auth_user.get('imageUrl', ''),
-                            name=auth_user.get(
-                                'displayName', self.user_id or 'Azure DevOps User'
-                            ),
-                            email=auth_user.get('uniqueName'),
-                            company=None,
-                        )
-                except Exception as connection_error:
-                    logger.debug(f'Could not get connection data: {connection_error}')
-
-                # Basic fallback if connection data fails
-                return User(
-                    id=0,  # Placeholder ID
-                    login=self.user_id or 'azure_devops_user',
-                    avatar_url='',
-                    name=self.user_id or 'Azure DevOps User',
-                    email=None,
-                    company=None,
-                )
-
-            # If projects API also fails, try the old profile approach as last resort
-            profile_url = f'{self.base_url}/profile/profiles/me'
-            profile_params = {'api-version': '7.1-preview.3'}
-
-            try:
-                profile_data, _ = await self._make_request(
-                    profile_url, params=profile_params
-                )
-
-                if profile_data and isinstance(profile_data, dict):
-                    return User(
-                        id=profile_data.get('id', 0),
-                        login=profile_data.get(
-                            'emailAddress', self.user_id or 'azure_devops_user'
-                        ),
-                        avatar_url=profile_data.get('avatar', {}).get('value', ''),
-                        name=profile_data.get(
-                            'displayName', self.user_id or 'Azure DevOps User'
-                        ),
-                        email=profile_data.get('emailAddress'),
-                        company=None,
-                    )
-            except Exception as profile_error:
-                logger.warning(f'Could not get user profile: {profile_error}')
-                raise AuthenticationError('Failed to authenticate with Azure DevOps')
-
-        except AuthenticationError:
-            raise
-        except Exception as e:
-            logger.error(f'Error getting Azure DevOps user: {e}')
-            raise AuthenticationError(f'Failed to authenticate with Azure DevOps: {e}')
-
-        # This should never be reached, but added for mypy
-        raise AuthenticationError('Failed to authenticate with Azure DevOps')
-
-    async def get_repositories(self, sort: str, app_mode: AppMode) -> list[Repository]:
-        """Get repositories for the authenticated user.
-
-        Args:
-            sort: The sort order
-            app_mode: The app mode
-
-        Returns:
-            A list of repositories
-        """
-        try:
-            # Get all repositories across all projects
-            repos_url = f'{self.base_url}/git/repositories'
-            repos_params = {'api-version': '7.1-preview.1'}
-
-            repos_data, _ = await self._make_request(repos_url, params=repos_params)
-
-            if not repos_data or not isinstance(repos_data, dict):
-                return []
-
-            repositories = repos_data.get('value', [])
-
-            # Convert to Repository objects
-            result = []
-            for repo in repositories:
-                project_name = repo.get('project', {}).get('name', 'Unknown')
-                repo_name = repo.get('name', 'Unknown')
-
-                result.append(
-                    Repository(
-                        id=repo.get('id', ''),
-                        full_name=f'{project_name}/{repo_name}',
-                        git_provider=ProviderType.AZURE_DEVOPS,
-                        is_public=False,  # Azure DevOps repos are private by default
-                        stargazers_count=None,
-                        link_header=None,
-                        pushed_at=None,
-                    )
-                )
-
-            return result
-        except Exception as e:
-            logger.error(f'Error getting Azure DevOps repositories: {e}')
-            return []
+        return User(
+            id=str(user_id),
+            login=response.get('displayName', ''),
+            avatar_url=response.get('imageUrl', ''),
+            name=response.get('displayName', ''),
+            email=user_details.get('mailAddress', ''),
+            company=None,
+        )
 
     async def search_repositories(
-        self,
-        query: str,
-        per_page: int,
-        sort: str,
-        order: str,
+        self, query: str, per_page: int = 30, sort: str = 'updated', order: str = 'desc'
     ) -> list[Repository]:
-        """Search for repositories.
+        """Search for repositories in Azure DevOps."""
+        if not self.project:
+            # If no project is specified, get all repositories across all projects
+            url = f"{self.base_url}/_apis/git/repositories?api-version=7.1"
+        else:
+            # Get repositories for a specific project
+            url = f"{self.base_url}/{self.project}/_apis/git/repositories?api-version=7.1"
 
-        Args:
-            query: The search query
-            per_page: The number of results per page
-            sort: The sort order
-            order: The sort direction
+        response, _ = await self._make_request(url)
+        
+        # Filter repositories by query if provided
+        repos = response.get('value', [])
+        if query:
+            repos = [repo for repo in repos if query.lower() in repo.get('name', '').lower()]
+        
+        # Limit to per_page
+        repos = repos[:per_page]
+        
+        return [
+            Repository(
+                id=str(repo.get('id')),
+                full_name=f"{self.organization}/{repo.get('project', {}).get('name', '')}/{repo.get('name')}",
+                git_provider=ProviderType.AZURE_DEVOPS,
+                is_public=False,  # Azure DevOps repos are private by default
+            )
+            for repo in repos
+        ]
 
-        Returns:
-            A list of repositories
-        """
-        try:
-            # Get all repositories (Azure DevOps doesn't have a search API for repos)
-            repos_url = f'{self.base_url}/git/repositories'
-            repos_params = {'api-version': '7.1-preview.1'}
-
-            repos_data, _ = await self._make_request(repos_url, params=repos_params)
-
-            if not repos_data or not isinstance(repos_data, dict):
-                return []
-
-            repositories = repos_data.get('value', [])
-
-            # Filter repositories by name (simple client-side filtering)
-            filtered_repos = [
-                repo
-                for repo in repositories
-                if query.lower() in repo.get('name', '').lower()
-                or query.lower() in repo.get('project', {}).get('name', '').lower()
-            ]
-
-            # Convert to Repository objects
-            result = []
-            for repo in filtered_repos[:per_page]:
-                project_name = repo.get('project', {}).get('name', 'Unknown')
-                repo_name = repo.get('name', 'Unknown')
-
-                result.append(
-                    Repository(
-                        id=repo.get('id', ''),
-                        full_name=f'{project_name}/{repo_name}',
-                        git_provider=ProviderType.AZURE_DEVOPS,
-                        is_public=False,  # Azure DevOps repos are private by default
-                        stargazers_count=None,
-                        link_header=None,
-                        pushed_at=None,
-                    )
-                )
-
-            return result
-        except Exception as e:
-            logger.error(f'Error searching Azure DevOps repositories: {e}')
-            return []
+    async def get_repositories(self, sort: str, app_mode: AppMode) -> list[Repository]:
+        """Get repositories for the authenticated user."""
+        MAX_REPOS = 1000
+        
+        # Get all projects first
+        projects_url = f"{self.base_url}/_apis/projects?api-version=7.1"
+        projects_response, _ = await self._make_request(projects_url)
+        projects = projects_response.get('value', [])
+        
+        all_repos = []
+        
+        # For each project, get its repositories
+        for project in projects:
+            project_name = project.get('name')
+            repos_url = f"{self.base_url}/{project_name}/_apis/git/repositories?api-version=7.1"
+            repos_response, _ = await self._make_request(repos_url)
+            repos = repos_response.get('value', [])
+            
+            for repo in repos:
+                all_repos.append({
+                    'id': repo.get('id'),
+                    'name': repo.get('name'),
+                    'project_name': project_name,
+                    'updated_date': repo.get('lastUpdateTime'),
+                })
+                
+                if len(all_repos) >= MAX_REPOS:
+                    break
+            
+            if len(all_repos) >= MAX_REPOS:
+                break
+        
+        # Sort repositories based on the sort parameter
+        if sort == 'updated':
+            all_repos.sort(key=lambda r: r.get('updated_date', ''), reverse=True)
+        elif sort == 'name':
+            all_repos.sort(key=lambda r: r.get('name', '').lower())
+        
+        return [
+            Repository(
+                id=str(repo.get('id')),
+                full_name=f"{self.organization}/{repo.get('project_name')}/{repo.get('name')}",
+                git_provider=ProviderType.AZURE_DEVOPS,
+                is_public=False,  # Azure DevOps repos are private by default
+            )
+            for repo in all_repos[:MAX_REPOS]
+        ]
 
     async def get_suggested_tasks(self) -> list[SuggestedTask]:
-        """Get suggested tasks for the authenticated user.
-
-        Returns:
-            A list of suggested tasks including:
-            - Open issues assigned to the user
-            - Pull requests authored by the user with:
-              - Merge conflicts
-              - Failing checks
-              - Unresolved comments
-        """
-        tasks: list[SuggestedTask] = []
-
-        try:
-            # Get open work items (bugs/issues)
-            await self._get_work_item_tasks(tasks)
-
-            # Get pull request tasks
-            await self._get_pull_request_tasks(tasks)
-
-            return tasks
-        except Exception as e:
-            logger.error(f'Error getting Azure DevOps suggested tasks: {e}')
-            return []
-
-    async def _get_work_item_tasks(self, tasks: list[SuggestedTask]) -> None:
-        """Get work item tasks using WIQL query."""
-        try:
-            # Use WIQL to query for open bugs
-            wiql_url = f'{self.base_url}/wit/wiql'
-            wiql_params = {'api-version': '7.1-preview.2'}
-
-            wiql_query = {
-                'query': """
-                    select [System.Id],
-                        [System.WorkItemType],
-                        [System.Title],
-                        [System.State],
-                        [System.TeamProject]
-                    from WorkItems
-                    where [System.WorkItemType] in ('Bug', 'Issue', 'Task')
-                    and [System.State] <> 'Closed'
-                    and [System.State] <> 'Resolved'
-                    and [System.State] <> 'Done'
-                    order by [System.ChangedDate] desc
-                """
-            }
-
-            wiql_data, _ = await self._make_request(
-                wiql_url,
-                params=wiql_params,
-                method=RequestMethod.POST,
-                json_data=wiql_query,
-            )
-
-            if not wiql_data or not isinstance(wiql_data, dict):
-                return
-
-            work_items = wiql_data.get('workItems', [])[:10]  # Limit to 10
-
-            # Get full work item details
-            for work_item in work_items:
-                work_item_id = work_item.get('id')
-                if not work_item_id:
-                    continue
-
-                # Get work item details
-                work_item_url = f'{self.base_url}/wit/workitems/{work_item_id}'
-                work_item_params = {'api-version': '7.1-preview.3'}
-
-                work_item_data, _ = await self._make_request(
-                    work_item_url, params=work_item_params
-                )
-
-                if work_item_data and isinstance(work_item_data, dict):
-                    fields = work_item_data.get('fields', {})
-                    project_name = fields.get('System.TeamProject', '')
-
-                    tasks.append(
-                        SuggestedTask(
-                            git_provider=ProviderType.AZURE_DEVOPS,
-                            task_type=TaskType.OPEN_ISSUE,
-                            repo=project_name,
-                            issue_number=work_item_id,
-                            title=fields.get('System.Title', ''),
-                        )
+        """Get suggested tasks for the authenticated user across all repositories."""
+        if not self.project:
+            return []  # Need a project to get pull requests
+        
+        # Get user info
+        user = await self.get_user()
+        
+        # Get pull requests created by the user
+        url = f"{self.base_url}/{self.project}/_apis/git/pullrequests?api-version=7.1&searchCriteria.creatorId={user.id}&searchCriteria.status=active"
+        response, _ = await self._make_request(url)
+        
+        pull_requests = response.get('value', [])
+        tasks = []
+        
+        for pr in pull_requests:
+            repo_name = pr.get('repository', {}).get('name', '')
+            pr_id = pr.get('pullRequestId')
+            title = pr.get('title', '')
+            
+            # Check for merge conflicts
+            if pr.get('mergeStatus') == 'conflicts':
+                tasks.append(
+                    SuggestedTask(
+                        git_provider=ProviderType.AZURE_DEVOPS,
+                        task_type=TaskType.MERGE_CONFLICTS,
+                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        issue_number=pr_id,
+                        title=title,
                     )
-
-        except Exception as e:
-            logger.warning(f'Error getting work item tasks: {e}')
-
-    async def _get_pull_request_tasks(self, tasks: list[SuggestedTask]) -> None:
-        """Get pull request tasks."""
-        try:
-            # Get all repositories
-            repos_url = f'{self.base_url}/git/repositories'
-            repos_params = {'api-version': '7.1-preview.1'}
-
-            repos_data, _ = await self._make_request(repos_url, params=repos_params)
-
-            if not repos_data or not isinstance(repos_data, dict):
-                return
-
-            repositories = repos_data.get('value', [])
-
-            # For each repository, get pull requests
-            for repo in repositories:
-                project_name = repo.get('project', {}).get('name', '')
-                repo_name = repo.get('name', '')
-                repo_id = repo.get('id', '')
-                full_repo_name = f'{project_name}/{repo_name}'
-
-                if not project_name or not repo_id:
-                    continue
-
-                # Get active pull requests
-                prs_url = f'{self.base_url}/git/repositories/{repo_id}/pullrequests'
-                prs_params = {
-                    'api-version': '7.1-preview.1',
-                    'searchCriteria.status': 'active',
-                }
-
-                prs_data, _ = await self._make_request(prs_url, params=prs_params)
-
-                if not prs_data or not isinstance(prs_data, dict):
-                    continue
-
-                pull_requests = prs_data.get('value', [])
-
-                for pr in pull_requests:
-                    pr_id = pr.get('pullRequestId')
-                    if not pr_id:
-                        continue
-
-                    task_type = None
-
-                    # Check for merge conflicts
-                    if pr.get('mergeStatus') == 'conflicts':
-                        task_type = TaskType.MERGE_CONFLICTS
-                    else:
-                        # Check for failing policy evaluations
-                        try:
-                            policy_url = f'{self.base_url}/policy/evaluations'
-                            policy_params = {
-                                'api-version': '7.1-preview.1',
-                                'artifactId': f'vstfs:///CodeReview/CodeReviewId/{project_name}/{pr_id}',
-                            }
-
-                            policy_data, _ = await self._make_request(
-                                policy_url, params=policy_params
-                            )
-
-                            if policy_data and isinstance(policy_data, dict):
-                                evaluations = policy_data.get('value', [])
-                                has_failing_checks = any(
-                                    eval.get('status') == 'rejected'
-                                    for eval in evaluations
-                                )
-
-                                if has_failing_checks:
-                                    task_type = TaskType.FAILING_CHECKS
-                        except Exception:
-                            # Policy evaluations might not be accessible, continue
-                            pass
-
-                        # Check for unresolved comments if no other issues found
-                        if not task_type:
-                            try:
-                                threads_url = f'{self.base_url}/git/repositories/{repo_id}/pullRequests/{pr_id}/threads'
-                                threads_params = {'api-version': '7.1-preview.1'}
-
-                                threads_data, _ = await self._make_request(
-                                    threads_url, params=threads_params
-                                )
-
-                                if threads_data and isinstance(threads_data, dict):
-                                    threads = threads_data.get('value', [])
-                                    has_unresolved_comments = any(
-                                        thread.get('status') == 'active'
-                                        and not thread.get('isDeleted', False)
-                                        for thread in threads
-                                    )
-
-                                    if has_unresolved_comments:
-                                        task_type = TaskType.UNRESOLVED_COMMENTS
-                            except Exception:
-                                # Threads might not be accessible, continue
-                                pass
-
-                    # Add the task if we identified a specific issue
-                    if task_type:
-                        tasks.append(
-                            SuggestedTask(
-                                git_provider=ProviderType.AZURE_DEVOPS,
-                                task_type=task_type,
-                                repo=full_repo_name,
-                                issue_number=pr_id,
-                                title=pr.get('title', ''),
-                            )
-                        )
-
-        except Exception as e:
-            logger.warning(f'Error getting pull request tasks: {e}')
+                )
+            # Check for failing checks
+            elif pr.get('status') == 'failed':
+                tasks.append(
+                    SuggestedTask(
+                        git_provider=ProviderType.AZURE_DEVOPS,
+                        task_type=TaskType.FAILING_CHECKS,
+                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        issue_number=pr_id,
+                        title=title,
+                    )
+                )
+            # Check for unresolved comments
+            elif pr.get('hasUnresolvedComments', False):
+                tasks.append(
+                    SuggestedTask(
+                        git_provider=ProviderType.AZURE_DEVOPS,
+                        task_type=TaskType.UNRESOLVED_COMMENTS,
+                        repo=f"{self.organization}/{self.project}/{repo_name}",
+                        issue_number=pr_id,
+                        title=title,
+                    )
+                )
+        
+        # Get work items assigned to the user
+        work_items_url = f"{self.base_url}/{self.project}/_apis/wit/wiql?api-version=7.1"
+        wiql_query = {
+            "query": f"SELECT [System.Id], [System.Title], [System.State] FROM WorkItems WHERE [System.AssignedTo] = @me AND [System.State] = 'Active'"
+        }
+        
+        work_items_response, _ = await self._make_request(
+            url=work_items_url, 
+            params=wiql_query, 
+            method=RequestMethod.POST
+        )
+        
+        work_item_references = work_items_response.get('workItems', [])
+        
+        # Get details for each work item
+        for work_item_ref in work_item_references:
+            work_item_id = work_item_ref.get('id')
+            work_item_url = f"{self.base_url}/{self.project}/_apis/wit/workitems/{work_item_id}?api-version=7.1"
+            work_item, _ = await self._make_request(work_item_url)
+            
+            title = work_item.get('fields', {}).get('System.Title', '')
+            
+            tasks.append(
+                SuggestedTask(
+                    git_provider=ProviderType.AZURE_DEVOPS,
+                    task_type=TaskType.OPEN_ISSUE,
+                    repo=f"{self.organization}/{self.project}",
+                    issue_number=work_item_id,
+                    title=title,
+                )
+            )
+        
+        return tasks
 
     async def get_repository_details_from_repo_name(
         self, repository: str
     ) -> Repository:
-        """Get repository details from repository name.
-
-        Args:
-            repository: The repository name (format: project/repo)
-
-        Returns:
-            The repository details
-        """
-        try:
-            # Parse the repository name (expected format: project/repo)
-            parts = repository.split('/')
-            if len(parts) != 2:
-                raise ValueError(
-                    f'Invalid repository name format: {repository}. Expected format: project/repo'
-                )
-
-            project_name, repo_name = parts
-
-            # Get repositories for the specific project
-            repos_url = f'{self.base_url}/git/repositories'
-            repos_params = {'api-version': '7.1-preview.1', 'project': project_name}
-
-            repos_data, _ = await self._make_request(repos_url, params=repos_params)
-
-            if not repos_data or not isinstance(repos_data, dict):
-                raise ValueError(f'Repository not found: {repository}')
-
-            repositories = repos_data.get('value', [])
-            repo = next(
-                (
-                    r
-                    for r in repositories
-                    if r.get('name', '').lower() == repo_name.lower()
-                ),
-                None,
-            )
-
-            if not repo:
-                raise ValueError(f'Repository not found: {repository}')
-
-            return Repository(
-                id=repo.get('id', ''),
-                full_name=f'{project_name}/{repo_name}',
-                git_provider=ProviderType.AZURE_DEVOPS,
-                is_public=False,  # Azure DevOps repos are private by default
-                stargazers_count=None,
-                link_header=None,
-                pushed_at=None,
-            )
-        except Exception as e:
-            logger.error(f'Error getting Azure DevOps repository details: {e}')
-            raise AuthenticationError(f'Failed to get repository details: {e}')
+        """Gets repository details from repository name."""
+        # Parse repository string: organization/project/repo
+        parts = repository.split('/')
+        if len(parts) < 3:
+            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
+        
+        org = parts[0]
+        project = parts[1]
+        repo_name = parts[2]
+        
+        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.1"
+        repo, _ = await self._make_request(url)
+        
+        return Repository(
+            id=str(repo.get('id')),
+            full_name=f"{org}/{project}/{repo.get('name')}",
+            git_provider=ProviderType.AZURE_DEVOPS,
+            is_public=False,  # Azure DevOps repos are private by default
+        )
 
     async def get_branches(self, repository: str) -> list[Branch]:
-        """Get branches for a repository.
-
-        Args:
-            repository: The repository name (format: project/repo)
-
-        Returns:
-            A list of branches
-        """
-        try:
-            # Parse the repository name (expected format: project/repo)
-            parts = repository.split('/')
-            if len(parts) != 2:
-                raise ValueError(
-                    f'Invalid repository name format: {repository}. Expected format: project/repo'
-                )
-
-            project_name, repo_name = parts
-
-            # First, get the repository ID
-            repo_details = await self.get_repository_details_from_repo_name(repository)
-            repo_id = repo_details.id
-
-            # Get the branches (refs) for the repository
-            refs_url = f'{self.base_url}/git/repositories/{repo_id}/refs'
-            refs_params = {
-                'api-version': '7.1-preview.1',
-                'filter': 'heads/',  # Only get branch refs, not tags
-            }
-
-            refs_data, _ = await self._make_request(refs_url, params=refs_params)
-
-            if not refs_data or not isinstance(refs_data, dict):
-                return []
-
-            refs = refs_data.get('value', [])
-
-            # Convert to Branch objects
-            result = []
-            for ref in refs:
-                # Extract branch name from ref name (remove 'refs/heads/' prefix)
-                ref_name = ref.get('name', '')
-                if ref_name.startswith('refs/heads/'):
-                    branch_name = ref_name[len('refs/heads/') :]
-
-                    result.append(
-                        Branch(
-                            name=branch_name,
-                            commit_sha=ref.get('objectId', ''),
-                            protected=False,  # Azure DevOps doesn't expose this information directly
-                            last_push_date=None,  # Azure DevOps doesn't expose this information directly
-                        )
-                    )
-
-            return result
-        except Exception as e:
-            logger.error(f'Error getting Azure DevOps branches: {e}')
-            return []
+        """Get branches for a repository."""
+        # Parse repository string: organization/project/repo
+        parts = repository.split('/')
+        if len(parts) < 3:
+            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
+        
+        org = parts[0]
+        project = parts[1]
+        repo_name = parts[2]
+        
+        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/refs?api-version=7.1&filter=heads/"
+        
+        # Set maximum branches to fetch
+        MAX_BRANCHES = 1000
+        
+        response, _ = await self._make_request(url)
+        branches_data = response.get('value', [])
+        
+        all_branches = []
+        
+        for branch_data in branches_data:
+            # Extract branch name from the ref (e.g., "refs/heads/main" -> "main")
+            name = branch_data.get('name', '').replace('refs/heads/', '')
+            
+            # Get the commit details for this branch
+            object_id = branch_data.get('objectId', '')
+            commit_url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{object_id}?api-version=7.1"
+            commit_data, _ = await self._make_request(commit_url)
+            
+            # Check if the branch is protected
+            policy_url = f"https://dev.azure.com/{org}/{project}/_apis/git/policy/configurations?api-version=7.1&repositoryId={repo_name}&refName=refs/heads/{name}"
+            policy_data, _ = await self._make_request(policy_url)
+            is_protected = len(policy_data.get('value', [])) > 0
+            
+            branch = Branch(
+                name=name,
+                commit_sha=object_id,
+                protected=is_protected,
+                last_push_date=commit_data.get('committer', {}).get('date'),
+            )
+            all_branches.append(branch)
+            
+            if len(all_branches) >= MAX_BRANCHES:
+                break
+        
+        return all_branches
 
     async def create_pr(
         self,
-        repo_name: str,
+        repository: str,
         source_branch: str,
         target_branch: str,
         title: str,
-        body: str | None = None,
+        description: str | None = None,
         draft: bool = False,
-    ) -> str:
-        """Create a pull request in Azure DevOps.
-
-        Args:
-            repo_name: The repository name (format: project/repo)
-            source_branch: The source branch name
-            target_branch: The target branch name
-            title: The pull request title
-            body: The pull request description (optional)
-            draft: Whether the pull request should be a draft (optional)
-
-        Returns:
-            The URL of the created pull request
-
-        Raises:
-            ValueError: If the repository name format is invalid
-            AuthenticationError: If authentication fails
-            UnknownException: If the API request fails
-        """
-        try:
-            # Parse the repository name (expected format: project/repo)
-            parts = repo_name.split('/')
-            if len(parts) != 2:
-                raise ValueError(
-                    f'Invalid repository name format: {repo_name}. Expected format: project/repo'
-                )
-
-            project_name, repo_name_only = parts
-
-            # Get the repository details to get the repository ID
-            repo_details = await self.get_repository_details_from_repo_name(repo_name)
-            repo_id = repo_details.id
-
-            # Prepare the pull request data
-            pr_data = {
-                'sourceRefName': f'refs/heads/{source_branch}',
-                'targetRefName': f'refs/heads/{target_branch}',
-                'title': title,
-                'description': body
-                or f'Pull request from {source_branch} to {target_branch}',
-                'isDraft': draft,
-            }
-
-            # Create the pull request
-            pr_url = f'{self.base_url}/git/repositories/{repo_id}/pullrequests'
-            pr_params = {'api-version': '7.1-preview.1'}
-
-            response_data, _ = await self._make_request(
-                url=pr_url,
-                params=pr_params,
-                method=RequestMethod.POST,
-                json_data=pr_data,
-            )
-
-            if not response_data or not isinstance(response_data, dict):
-                raise UnknownException(
-                    'Failed to create pull request: Invalid response'
-                )
-
-            # Extract the pull request URL
-            pr_id = response_data.get('pullRequestId')
-            if not pr_id:
-                raise UnknownException(
-                    'Failed to create pull request: No PR ID returned'
-                )
-
-            # Construct the web URL for the pull request
-            web_url = f'{self.organization_url}/{project_name}/_git/{repo_name_only}/pullrequest/{pr_id}'
-
-            logger.info(f'Successfully created Azure DevOps pull request: {web_url}')
-            return web_url
-
-        except ValueError:
-            raise
-        except AuthenticationError:
-            raise
-        except Exception as e:
-            logger.error(f'Error creating Azure DevOps pull request: {e}')
-            raise UnknownException(f'Failed to create pull request: {e}')
+    ) -> dict[str, Any]:
+        """Create a pull request in Azure DevOps."""
+        # Parse repository string: organization/project/repo
+        parts = repository.split('/')
+        if len(parts) < 3:
+            raise ValueError(f"Invalid repository format: {repository}. Expected format: organization/project/repo")
+        
+        org = parts[0]
+        project = parts[1]
+        repo_name = parts[2]
+        
+        url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?api-version=7.1"
+        
+        data = {
+            "sourceRefName": f"refs/heads/{source_branch}",
+            "targetRefName": f"refs/heads/{target_branch}",
+            "title": title,
+            "description": description or "",
+            "isDraft": draft,
+        }
+        
+        response, _ = await self._make_request(url=url, params=data, method=RequestMethod.POST)
+        
+        return {
+            "id": response.get('pullRequestId'),
+            "number": response.get('pullRequestId'),
+            "url": response.get('url'),
+        }

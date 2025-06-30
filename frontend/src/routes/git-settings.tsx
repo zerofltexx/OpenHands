@@ -7,6 +7,7 @@ import { useLogout } from "#/hooks/mutation/use-logout";
 import { GitHubTokenInput } from "#/components/features/settings/git-settings/github-token-input";
 import { GitLabTokenInput } from "#/components/features/settings/git-settings/gitlab-token-input";
 import { BitbucketTokenInput } from "#/components/features/settings/git-settings/bitbucket-token-input";
+import { AzureDevOpsTokenInput } from "#/components/features/settings/git-settings/azure-devops-token-input";
 import { ConfigureGitHubRepositoriesAnchor } from "#/components/features/settings/git-settings/configure-github-repositories-anchor";
 import { InstallSlackAppAnchor } from "#/components/features/settings/git-settings/install-slack-app-anchor";
 import { I18nKey } from "#/i18n/declaration";
@@ -18,7 +19,6 @@ import { retrieveAxiosErrorMessage } from "#/utils/retrieve-axios-error-message"
 import { GitSettingInputsSkeleton } from "#/components/features/settings/git-settings/github-settings-inputs-skeleton";
 import { useAddGitProviders } from "#/hooks/mutation/use-add-git-providers";
 import { useUserProviders } from "#/hooks/use-user-providers";
-import { ProjectManagementIntegration } from "#/components/features/settings/project-management/project-management-integration";
 
 function GitSettingsScreen() {
   const { t } = useTranslation();
@@ -37,6 +37,8 @@ function GitSettingsScreen() {
     React.useState(false);
   const [bitbucketTokenInputHasValue, setBitbucketTokenInputHasValue] =
     React.useState(false);
+  const [azureDevOpsTokenInputHasValue, setAzureDevOpsTokenInputHasValue] =
+    React.useState(false);
 
   const [githubHostInputHasValue, setGithubHostInputHasValue] =
     React.useState(false);
@@ -44,15 +46,19 @@ function GitSettingsScreen() {
     React.useState(false);
   const [bitbucketHostInputHasValue, setBitbucketHostInputHasValue] =
     React.useState(false);
+  const [azureDevOpsHostInputHasValue, setAzureDevOpsHostInputHasValue] =
+    React.useState(false);
 
   const existingGithubHost = settings?.PROVIDER_TOKENS_SET.github;
   const existingGitlabHost = settings?.PROVIDER_TOKENS_SET.gitlab;
   const existingBitbucketHost = settings?.PROVIDER_TOKENS_SET.bitbucket;
+  const existingAzureDevOpsHost = settings?.PROVIDER_TOKENS_SET.azure_devops;
 
   const isSaas = config?.APP_MODE === "saas";
   const isGitHubTokenSet = providers.includes("github");
   const isGitLabTokenSet = providers.includes("gitlab");
   const isBitbucketTokenSet = providers.includes("bitbucket");
+  const isAzureDevOpsTokenSet = providers.includes("azure_devops");
 
   const formAction = async (formData: FormData) => {
     const disconnectButtonClicked =
@@ -67,16 +73,21 @@ function GitSettingsScreen() {
     const gitlabToken = formData.get("gitlab-token-input")?.toString() || "";
     const bitbucketToken =
       formData.get("bitbucket-token-input")?.toString() || "";
+    const azureDevOpsToken =
+      formData.get("azure-devops-token-input")?.toString() || "";
     const githubHost = formData.get("github-host-input")?.toString() || "";
     const gitlabHost = formData.get("gitlab-host-input")?.toString() || "";
     const bitbucketHost =
       formData.get("bitbucket-host-input")?.toString() || "";
+    const azureDevOpsHost =
+      formData.get("azure-devops-host-input")?.toString() || "";
 
     // Create providers object with all tokens
     const providerTokens: Record<string, { token: string; host: string }> = {
       github: { token: githubToken, host: githubHost },
       gitlab: { token: gitlabToken, host: gitlabHost },
       bitbucket: { token: bitbucketToken, host: bitbucketHost },
+      azure_devops: { token: azureDevOpsToken, host: azureDevOpsHost },
     };
 
     saveGitProviders(
@@ -95,9 +106,11 @@ function GitSettingsScreen() {
           setGithubTokenInputHasValue(false);
           setGitlabTokenInputHasValue(false);
           setBitbucketTokenInputHasValue(false);
+          setAzureDevOpsTokenInputHasValue(false);
           setGithubHostInputHasValue(false);
           setGitlabHostInputHasValue(false);
           setBitbucketHostInputHasValue(false);
+          setAzureDevOpsHostInputHasValue(false);
         },
       },
     );
@@ -107,14 +120,12 @@ function GitSettingsScreen() {
     !githubTokenInputHasValue &&
     !gitlabTokenInputHasValue &&
     !bitbucketTokenInputHasValue &&
+    !azureDevOpsTokenInputHasValue &&
     !githubHostInputHasValue &&
     !gitlabHostInputHasValue &&
-    !bitbucketHostInputHasValue;
+    !bitbucketHostInputHasValue &&
+    !azureDevOpsHostInputHasValue;
   const shouldRenderExternalConfigureButtons = isSaas && config.APP_SLUG;
-  const shouldRenderProjectManagementIntegrations =
-    config?.FEATURE_FLAGS?.ENABLE_JIRA ||
-    config?.FEATURE_FLAGS?.ENABLE_JIRA_DC ||
-    config?.FEATURE_FLAGS?.ENABLE_LINEAR;
 
   return (
     <form
@@ -123,86 +134,76 @@ function GitSettingsScreen() {
       className="flex flex-col h-full justify-between"
     >
       {!isLoading && (
-        <div className="flex flex-col">
+        <div className="p-9 flex flex-col gap-12">
           {shouldRenderExternalConfigureButtons && !isLoading && (
-            <>
-              <div className="pb-1 flex flex-col">
-                <h3 className="text-xl font-medium text-white">
-                  {t(I18nKey.SETTINGS$GITHUB)}
-                </h3>
-                <ConfigureGitHubRepositoriesAnchor slug={config.APP_SLUG!} />
-              </div>
-              <div className="w-1/2 border-b border-gray-200" />
-            </>
+            <ConfigureGitHubRepositoriesAnchor slug={config.APP_SLUG!} />
           )}
 
           {shouldRenderExternalConfigureButtons && !isLoading && (
-            <>
-              <div className="pb-1 mt-6 flex flex-col">
-                <h3 className="text-xl font-medium text-white">
-                  {t(I18nKey.SETTINGS$SLACK)}
-                </h3>
-                <InstallSlackAppAnchor />
-              </div>
-              <div className="w-1/2 border-b border-gray-200" />
-            </>
+            <InstallSlackAppAnchor />
           )}
 
-          {shouldRenderProjectManagementIntegrations && !isLoading && (
-            <div className="mt-6">
-              <ProjectManagementIntegration />
-            </div>
+          {!isSaas && (
+            <GitHubTokenInput
+              name="github-token-input"
+              isGitHubTokenSet={isGitHubTokenSet}
+              onChange={(value) => {
+                setGithubTokenInputHasValue(!!value);
+              }}
+              onGitHubHostChange={(value) => {
+                setGithubHostInputHasValue(!!value);
+              }}
+              githubHostSet={existingGithubHost}
+            />
           )}
 
-          <div className="flex flex-col gap-4">
-            {!isSaas && (
-              <GitHubTokenInput
-                name="github-token-input"
-                isGitHubTokenSet={isGitHubTokenSet}
-                onChange={(value) => {
-                  setGithubTokenInputHasValue(!!value);
-                }}
-                onGitHubHostChange={(value) => {
-                  setGithubHostInputHasValue(!!value);
-                }}
-                githubHostSet={existingGithubHost}
-              />
-            )}
+          {!isSaas && (
+            <GitLabTokenInput
+              name="gitlab-token-input"
+              isGitLabTokenSet={isGitLabTokenSet}
+              onChange={(value) => {
+                setGitlabTokenInputHasValue(!!value);
+              }}
+              onGitLabHostChange={(value) => {
+                setGitlabHostInputHasValue(!!value);
+              }}
+              gitlabHostSet={existingGitlabHost}
+            />
+          )}
 
-            {!isSaas && (
-              <GitLabTokenInput
-                name="gitlab-token-input"
-                isGitLabTokenSet={isGitLabTokenSet}
-                onChange={(value) => {
-                  setGitlabTokenInputHasValue(!!value);
-                }}
-                onGitLabHostChange={(value) => {
-                  setGitlabHostInputHasValue(!!value);
-                }}
-                gitlabHostSet={existingGitlabHost}
-              />
-            )}
+          {!isSaas && (
+            <BitbucketTokenInput
+              name="bitbucket-token-input"
+              isBitbucketTokenSet={isBitbucketTokenSet}
+              onChange={(value) => {
+                setBitbucketTokenInputHasValue(!!value);
+              }}
+              onBitbucketHostChange={(value) => {
+                setBitbucketHostInputHasValue(!!value);
+              }}
+              bitbucketHostSet={existingBitbucketHost}
+            />
+          )}
 
-            {!isSaas && (
-              <BitbucketTokenInput
-                name="bitbucket-token-input"
-                isBitbucketTokenSet={isBitbucketTokenSet}
-                onChange={(value) => {
-                  setBitbucketTokenInputHasValue(!!value);
-                }}
-                onBitbucketHostChange={(value) => {
-                  setBitbucketHostInputHasValue(!!value);
-                }}
-                bitbucketHostSet={existingBitbucketHost}
-              />
-            )}
-          </div>
+          {!isSaas && (
+            <AzureDevOpsTokenInput
+              name="azure-devops-token-input"
+              isAzureDevOpsTokenSet={isAzureDevOpsTokenSet}
+              onChange={(value) => {
+                setAzureDevOpsTokenInputHasValue(!!value);
+              }}
+              onAzureDevOpsHostChange={(value) => {
+                setAzureDevOpsHostInputHasValue(!!value);
+              }}
+              azureDevOpsHostSet={existingAzureDevOpsHost}
+            />
+          )}
         </div>
       )}
 
       {isLoading && <GitSettingInputsSkeleton />}
 
-      <div className="flex gap-6 p-6 justify-end">
+      <div className="flex gap-6 p-6 justify-end border-t border-t-tertiary">
         {!shouldRenderExternalConfigureButtons && (
           <>
             <BrandButton
@@ -211,7 +212,7 @@ function GitSettingsScreen() {
               type="submit"
               variant="secondary"
               isDisabled={
-                !isGitHubTokenSet && !isGitLabTokenSet && !isBitbucketTokenSet
+                !isGitHubTokenSet && !isGitLabTokenSet && !isBitbucketTokenSet && !isAzureDevOpsTokenSet
               }
             >
               {t(I18nKey.GIT$DISCONNECT_TOKENS)}
