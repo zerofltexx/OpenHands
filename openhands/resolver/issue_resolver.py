@@ -81,6 +81,7 @@ class IssueResolver:
             or os.getenv('GITHUB_TOKEN')
             or os.getenv('GITLAB_TOKEN')
             or os.getenv('BITBUCKET_TOKEN')
+            or os.getenv('AZURE_DEVOPS_TOKEN')
         )
         username = args.username if args.username else os.getenv('GIT_USERNAME')
         if not username:
@@ -124,13 +125,14 @@ class IssueResolver:
 
         base_domain = args.base_domain
         if base_domain is None:
-            base_domain = (
-                'github.com'
-                if platform == ProviderType.GITHUB
-                else 'gitlab.com'
-                if platform == ProviderType.GITLAB
-                else 'bitbucket.org'
-            )
+            if platform == ProviderType.GITHUB:
+                base_domain = 'github.com'
+            elif platform == ProviderType.GITLAB:
+                base_domain = 'gitlab.com'
+            elif platform == ProviderType.BITBUCKET:
+                base_domain = 'bitbucket.org'
+            else:  # platform == ProviderType.AZURE_DEVOPS
+                base_domain = 'dev.azure.com'
 
         self.output_dir = args.output_dir
         self.issue_type = issue_type
