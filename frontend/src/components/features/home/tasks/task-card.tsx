@@ -59,10 +59,11 @@ export function TaskCard({ task }: TaskCardProps) {
   } else if (task.git_provider === "azure_devops") {
     // Azure DevOps URL format: https://dev.azure.com/{organization}/{project}/_workitems/edit/{id}
     // or https://dev.azure.com/{organization}/{project}/_git/{repo}/pullrequest/{id}
+    const azureDevOpsBaseUrl = "https://dev.azure.com";
     if (task.task_type === "OPEN_ISSUE") {
-      href = `https://dev.azure.com/${task.repo}/_workitems/edit/${task.issue_number}`;
+      href = `${azureDevOpsBaseUrl}/${task.repo}/_workitems/edit/${task.issue_number}`;
     } else {
-      href = `https://dev.azure.com/${task.repo}/_git/${task.repo.split("/")[1]}/pullrequest/${task.issue_number}`;
+      href = `${azureDevOpsBaseUrl}/${task.repo}/_git/${task.repo.split("/")[1]}/pullrequest/${task.issue_number}`;
     }
   } else {
     const hrefType = task.task_type === "OPEN_ISSUE" ? "issues" : "pull";
