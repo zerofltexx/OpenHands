@@ -1,8 +1,8 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { I18nKey } from "#/i18n/declaration";
-import { BrandInput } from "../../brand-input";
-import { BrandLabel } from "../../brand-label";
+import { BrandInput } from "../brand-input";
+import { BrandLabel } from "../brand-label";
 import { AzureDevOpsTokenHelpAnchor } from "./azure-devops-token-help-anchor";
 
 type AzureDevOpsTokenInputProps = {
