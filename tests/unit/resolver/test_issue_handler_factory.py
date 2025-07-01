@@ -5,6 +5,7 @@ from openhands.core.config import LLMConfig
 from openhands.integrations.provider import ProviderType
 from openhands.resolver.interfaces.github import GithubIssueHandler, GithubPRHandler
 from openhands.resolver.interfaces.gitlab import GitlabIssueHandler, GitlabPRHandler
+from openhands.resolver.interfaces.azure_devops import AzureDevOpsIssueHandler
 from openhands.resolver.interfaces.issue_definitions import (
     ServiceContextIssue,
     ServiceContextPR,
@@ -38,6 +39,8 @@ test_cases = [
     (ProviderType.GITHUB, 'pr', ServiceContextPR, GithubPRHandler),
     (ProviderType.GITLAB, 'issue', ServiceContextIssue, GitlabIssueHandler),
     (ProviderType.GITLAB, 'pr', ServiceContextPR, GitlabPRHandler),
+    (ProviderType.AZURE_DEVOPS, 'issue', ServiceContextIssue, AzureDevOpsIssueHandler),
+    (ProviderType.AZURE_DEVOPS, 'pr', ServiceContextPR, AzureDevOpsIssueHandler),
 ]
 
 
