@@ -19,6 +19,7 @@ class ProviderType(Enum):
     GITLAB = 'gitlab'
     BITBUCKET = 'bitbucket'
     AZURE_DEVOPS = 'azure_devops'
+    ENTERPRISE_SSO = 'enterprise_sso'
 
 
 class TaskType(str, Enum):
