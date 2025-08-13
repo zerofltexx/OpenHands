@@ -13,9 +13,7 @@ from openhands.integrations.provider import ProviderType
 async def validate_provider_token(
     token: SecretStr, base_domain: str | None = None
 ) -> ProviderType | None:
-    """
-    Determine whether a token is for GitHub, GitLab, Bitbucket, or Azure DevOps by attempting to get user info
-    from the services.
+    """Determine whether a token is for GitHub, GitLab, Bitbucket, or Azure DevOps by attempting to get user info from the services.
 
     Args:
         token: The token to check
