@@ -8,7 +8,7 @@ from fastmcp.server.dependencies import get_http_request
 from pydantic import Field
 
 from openhands.core.logger import openhands_logger as logger
-from openhands.integrations.azure_devops.azure_devops_service import AzureDevOpsService
+from openhands.integrations.azure_devops.azure_devops_service import AzureDevOpsServiceImpl
 from openhands.integrations.bitbucket.bitbucket_service import BitBucketServiceImpl
 from openhands.integrations.github.github_service import GithubServiceImpl
 from openhands.integrations.gitlab.gitlab_service import GitLabServiceImpl
@@ -323,7 +323,7 @@ async def create_azure_devops_pr(
         else ProviderToken()
     )
 
-    azure_devops_service = AzureDevOpsService(
+    azure_devops_service = AzureDevOpsServiceImpl(
         user_id=azure_devops_token.user_id,
         external_auth_id=user_id,
         external_auth_token=access_token,
@@ -332,11 +332,11 @@ async def create_azure_devops_pr(
     )
 
     try:
-        description = await get_convo_link(
+        description = await get_conversation_link(
             azure_devops_service, conversation_id, description or ''
         )
     except Exception as e:
-        logger.warning(f'Failed to append convo link: {e}')
+        logger.warning(f'Failed to append conversation link: {e}')
 
     try:
         response = await azure_devops_service.create_pr(

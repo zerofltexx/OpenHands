@@ -3,6 +3,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
+from openhands.integrations.protocols.http_client import HTTPClient
 from openhands.integrations.service_types import (
     BaseGitService,
     Branch,
@@ -17,7 +18,7 @@ from openhands.integrations.service_types import (
 from openhands.server.types import AppMode
 
 
-class AzureDevOpsService(BaseGitService, GitService):
+class AzureDevOpsServiceImpl(BaseGitService, HTTPClient, GitService):
     """Default implementation of GitService for Azure DevOps integration.
 
     This is an extension point in OpenHands that allows applications to customize Azure DevOps
@@ -51,8 +52,16 @@ class AzureDevOpsService(BaseGitService, GitService):
 
         if base_domain:
             # Parse organization and project from base_domain
-            # Format expected: dev.azure.com/{organization}/{project}
-            parts = base_domain.split('/')
+            # Strip URL prefix if present (e.g., "https://dev.azure.com/org/project" -> "org/project")
+            domain_path = base_domain
+            if '://' in domain_path:
+                # Remove protocol and domain, keep only path
+                domain_path = domain_path.split('://', 1)[1]
+                if '/' in domain_path:
+                    domain_path = domain_path.split('/', 1)[1]
+
+            # Format expected: organization/project (e.g., "contoso/MyProject")
+            parts = domain_path.split('/')
             if len(parts) >= 1:
                 self.organization = parts[0]
             if len(parts) >= 2:
@@ -89,6 +98,10 @@ class AzureDevOpsService(BaseGitService, GitService):
             'Content-Type': 'application/json',
             'Accept': 'application/json',
         }
+
+    async def _get_headers(self) -> dict[str, Any]:
+        """Retrieve the Azure DevOps headers."""
+        return await self._get_azure_devops_headers()
 
     def _has_token_expired(self, status_code: int) -> bool:
         return status_code == 401
@@ -244,6 +257,55 @@ class AzureDevOpsService(BaseGitService, GitService):
             )
             for repo in all_repos[:MAX_REPOS]
         ]
+
+
+    def _parse_repository_response(
+        self, repo: dict, project_name: str, link_header: str | None = None
+    ) -> Repository:
+        """Parse an Azure DevOps API repository response into a Repository object.
+
+        Args:
+            repo: Repository data from Azure DevOps API
+            project_name: The project name the repository belongs to
+            link_header: Optional link header for pagination
+
+        Returns:
+            Repository object
+        """
+        return Repository(
+            id=str(repo.get('id')),
+            full_name=f'{self.organization}/{project_name}/{repo.get("name")}',
+            git_provider=ProviderType.AZURE_DEVOPS,
+            is_public=False,  # Azure DevOps repos are private by default
+            link_header=link_header,
+        )
+
+    async def get_paginated_repos(
+        self,
+        page: int,
+        per_page: int,
+        sort: str,
+        installation_id: str | None,
+        query: str | None = None,
+    ) -> list[Repository]:
+        """Get a page of repositories for the authenticated user."""
+        # Get all repos first, then paginate manually
+        # Azure DevOps doesn't have native pagination for repositories
+        all_repos = await self.get_repositories(sort, AppMode.SAAS)
+
+        # Calculate pagination
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+
+        # Filter by query if provided
+        if query:
+            query_lower = query.lower()
+            all_repos = [
+                repo for repo in all_repos
+                if query_lower in repo.full_name.lower()
+            ]
+
+        return all_repos[start_idx:end_idx]
 
     async def get_suggested_tasks(self) -> list[SuggestedTask]:
         """Get suggested tasks for the authenticated user across all repositories."""
@@ -410,41 +472,104 @@ class AzureDevOpsService(BaseGitService, GitService):
 
     async def create_pr(
         self,
-        repository: str,
+        repo_name: str,
         source_branch: str,
         target_branch: str,
         title: str,
-        description: str | None = None,
+        body: str | None = None,
         draft: bool = False,
-    ) -> dict[str, Any]:
-        """Create a pull request in Azure DevOps."""
+    ) -> str:
+        """Creates a pull request in Azure DevOps.
+
+        Args:
+            repo_name: The repository name in format "organization/project/repo"
+            source_branch: The source branch name
+            target_branch: The target branch name
+            title: The title of the pull request
+            body: The description of the pull request
+            draft: Whether to create a draft pull request
+
+        Returns:
+            The URL of the created pull request
+        """
         # Parse repository string: organization/project/repo
+        parts = repo_name.split('/')
+        if len(parts) < 3:
+            raise ValueError(
+                f'Invalid repository format: {repo_name}. Expected format: organization/project/repo'
+            )
+
+        org = parts[0]
+        project = parts[1]
+        repo = parts[2]
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/pullrequests?api-version=7.1'
+
+        # Set default body if none provided
+        if not body:
+            body = f'Merging changes from {source_branch} into {target_branch}'
+
+        payload = {
+            'sourceRefName': f'refs/heads/{source_branch}',
+            'targetRefName': f'refs/heads/{target_branch}',
+            'title': title,
+            'description': body,
+            'isDraft': draft,
+        }
+
+        response, _ = await self._make_request(
+            url=url, params=payload, method=RequestMethod.POST
+        )
+
+        # Return the web URL of the created PR
+        pr_id = response.get('pullRequestId')
+        return f'https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{pr_id}'
+
+    def _parse_repository(self, repository: str) -> tuple[str, str, str]:
+        """Parse repository string into organization, project, and repo name.
+
+        Args:
+            repository: Repository string in format organization/project/repo
+
+        Returns:
+            Tuple of (organization, project, repo_name)
+        """
         parts = repository.split('/')
         if len(parts) < 3:
             raise ValueError(
                 f'Invalid repository format: {repository}. Expected format: organization/project/repo'
             )
+        return parts[0], parts[1], parts[2]
 
-        org = parts[0]
-        project = parts[1]
-        repo_name = parts[2]
+    async def _get_cursorrules_url(self, repository: str) -> str:
+        """Get the URL for checking .cursorrules file in Azure DevOps."""
+        org, project, repo = self._parse_repository(repository)
+        return f'{self.base_url}/{org}/{project}/_apis/git/repositories/{repo}/items?path=/.cursorrules&api-version=7.1'
 
-        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests?api-version=7.1'
+    async def _get_microagents_directory_url(
+        self, repository: str, microagents_path: str
+    ) -> str:
+        """Get the URL for checking microagents directory in Azure DevOps."""
+        org, project, repo = self._parse_repository(repository)
+        return f'{self.base_url}/{org}/{project}/_apis/git/repositories/{repo}/items?path=/{microagents_path}&recursionLevel=OneLevel&api-version=7.1'
 
-        data = {
-            'sourceRefName': f'refs/heads/{source_branch}',
-            'targetRefName': f'refs/heads/{target_branch}',
-            'title': title,
-            'description': description or '',
-            'isDraft': draft,
-        }
+    def _get_microagents_directory_params(self, microagents_path: str) -> dict | None:
+        """Get parameters for the microagents directory request. Return None if no parameters needed."""
+        return None
 
-        response, _ = await self._make_request(
-            url=url, params=data, method=RequestMethod.POST
+    def _is_valid_microagent_file(self, item: dict) -> bool:
+        """Check if an item represents a valid microagent file in Azure DevOps."""
+        return (
+            not item.get('isFolder', False)
+            and item.get('path', '').endswith('.md')
+            and not item.get('path', '').endswith('README.md')
         )
 
-        return {
-            'id': response.get('pullRequestId'),
-            'number': response.get('pullRequestId'),
-            'url': response.get('url'),
-        }
+    def _get_file_name_from_item(self, item: dict) -> str:
+        """Extract file name from directory item in Azure DevOps."""
+        path = item.get('path', '')
+        return path.split('/')[-1] if path else ''
+
+    def _get_file_path_from_item(self, item: dict, microagents_path: str) -> str:
+        """Extract file path from directory item in Azure DevOps."""
+        return item.get('path', '').lstrip('/')
