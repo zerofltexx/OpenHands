@@ -8,6 +8,7 @@ from openhands.integrations.service_types import (
     BaseGitService,
     Branch,
     GitService,
+    PaginatedBranchesResponse,
     ProviderType,
     Repository,
     RequestMethod,
@@ -469,6 +470,69 @@ class AzureDevOpsServiceImpl(BaseGitService, HTTPClient, GitService):
                 break
 
         return all_branches
+
+    async def get_paginated_branches(
+        self, repository: str, page: int = 1, per_page: int = 30
+    ) -> PaginatedBranchesResponse:
+        """Get branches for a repository with pagination"""
+        # Parse repository string: organization/project/repo
+        parts = repository.split('/')
+        if len(parts) < 3:
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+
+        org = parts[0]
+        project = parts[1]
+        repo_name = parts[2]
+
+        # First, get the repository to get its ID
+        repo_url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}?api-version=7.1'
+        repo_data, _ = await self._make_request(repo_url)
+        repo_id = repo_data.get('id', repo_name)  # Fall back to repo_name if ID not found
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/refs?api-version=7.1&filter=heads/'
+
+        response, _ = await self._make_request(url)
+        branches_data = response.get('value', [])
+
+        # Calculate pagination
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_data = branches_data[start_idx:end_idx]
+
+        branches: list[Branch] = []
+        for branch_data in paginated_data:
+            # Extract branch name from the ref (e.g., "refs/heads/main" -> "main")
+            name = branch_data.get('name', '').replace('refs/heads/', '')
+
+            # Get the commit details for this branch
+            object_id = branch_data.get('objectId', '')
+            commit_url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{object_id}?api-version=7.1'
+            commit_data, _ = await self._make_request(commit_url)
+
+            # Check if the branch is protected using repository ID
+            policy_url = f'https://dev.azure.com/{org}/{project}/_apis/git/policy/configurations?api-version=7.1&repositoryId={repo_id}&refName=refs/heads/{name}'
+            policy_data, _ = await self._make_request(policy_url)
+            is_protected = len(policy_data.get('value', [])) > 0
+
+            branch = Branch(
+                name=name,
+                commit_sha=object_id,
+                protected=is_protected,
+                last_push_date=commit_data.get('committer', {}).get('date'),
+            )
+            branches.append(branch)
+
+        # Determine if there's a next page
+        has_next_page = end_idx < len(branches_data)
+
+        return PaginatedBranchesResponse(
+            branches=branches,
+            has_next_page=has_next_page,
+            current_page=page,
+            per_page=per_page,
+        )
 
     async def create_pr(
         self,
