@@ -173,7 +173,7 @@ class AzureDevOpsServiceImpl(BaseGitService, HTTPClient, GitService):
         )
 
     async def search_repositories(
-        self, query: str, per_page: int = 30, sort: str = 'updated', order: str = 'desc'
+        self, query: str, per_page: int = 30, sort: str = 'updated', order: str = 'desc', public: bool = False
     ) -> list[Repository]:
         """Search for repositories in Azure DevOps."""
         if not self.project:
@@ -534,6 +534,61 @@ class AzureDevOpsServiceImpl(BaseGitService, HTTPClient, GitService):
             per_page=per_page,
         )
 
+    async def search_branches(
+        self, repository: str, query: str, per_page: int = 30
+    ) -> list[Branch]:
+        """Search for branches within a repository"""
+        # Parse repository string: organization/project/repo
+        parts = repository.split('/')
+        if len(parts) < 3:
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+
+        org = parts[0]
+        project = parts[1]
+        repo_name = parts[2]
+
+        url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/refs?api-version=7.1&filter=heads/'
+
+        try:
+            response, _ = await self._make_request(url)
+            branches_data = response.get('value', [])
+
+            # Filter branches by query
+            filtered_branches = []
+            for branch_data in branches_data:
+                # Extract branch name from the ref (e.g., "refs/heads/main" -> "main")
+                name = branch_data.get('name', '').replace('refs/heads/', '')
+                
+                # Check if query matches branch name
+                if query.lower() in name.lower():
+                    object_id = branch_data.get('objectId', '')
+                    
+                    # Get commit details for this branch
+                    commit_url = f'https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{object_id}?api-version=7.1'
+                    try:
+                        commit_data, _ = await self._make_request(commit_url)
+                        last_push_date = commit_data.get('committer', {}).get('date')
+                    except Exception:
+                        last_push_date = None
+                    
+                    branch = Branch(
+                        name=name,
+                        commit_sha=object_id,
+                        protected=False,  # Skip protected check for search to improve performance
+                        last_push_date=last_push_date,
+                    )
+                    filtered_branches.append(branch)
+                    
+                    if len(filtered_branches) >= per_page:
+                        break
+
+            return filtered_branches
+        except Exception:
+            # Return empty list on error instead of None
+            return []
+
     async def create_pr(
         self,
         repo_name: str,
@@ -613,8 +668,18 @@ class AzureDevOpsServiceImpl(BaseGitService, HTTPClient, GitService):
     async def _get_microagents_directory_url(
         self, repository: str, microagents_path: str
     ) -> str:
-        """Get the URL for checking microagents directory in Azure DevOps."""
-        org, project, repo = self._parse_repository(repository)
+        """Get the URL for checking microagents directory in Azure DevOps.
+
+        Note: For org-level microagents (e.g., 'org/.openhands'), Azure DevOps doesn't support
+        this concept, so we raise ValueError to let the caller fall back to other providers.
+        """
+        parts = repository.split('/')
+        if len(parts) < 3:
+            # Azure DevOps doesn't support org-level configs, only full repo paths
+            raise ValueError(
+                f'Invalid repository format: {repository}. Expected format: organization/project/repo'
+            )
+        org, project, repo = parts[0], parts[1], parts[2]
         return f'{self.base_url}/{org}/{project}/_apis/git/repositories/{repo}/items?path=/{microagents_path}&recursionLevel=OneLevel&api-version=7.1'
 
     def _get_microagents_directory_params(self, microagents_path: str) -> dict | None:

@@ -11,9 +11,9 @@ export function AzureDevOpsTokenHelpAnchor() {
         target="_blank"
         className="underline underline-offset-2"
         rel="noopener noreferrer"
-        aria-label={t(I18nKey.GIT$AZURE_DEVOPS_TOKEN_HELP)}
+        aria-label={t(I18nKey.AZURE_DEVOPS$TOKEN_HELP_TEXT)}
       >
-        {t(I18nKey.GIT$AZURE_DEVOPS_TOKEN_HELP)}
+        {t(I18nKey.AZURE_DEVOPS$TOKEN_HELP_TEXT)}
       </a>
     </p>
   );

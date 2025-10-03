@@ -434,6 +434,10 @@ class Runtime(FileEditRuntimeMixin):
         if not remote_repo_url:
             raise ValueError('Missing either Git token or valid repository')
 
+        # Log the repo URL (without token for security)
+        safe_url = remote_repo_url.split('@')[1] if '@' in remote_repo_url else remote_repo_url
+        self.log('info', f'Cloning from: {safe_url}')
+
         if self.status_callback:
             self.status_callback(
                 'info', RuntimeStatus.SETTING_UP_WORKSPACE, 'Setting up workspace...'
