@@ -29,12 +29,12 @@ export function AzureDevOpsTokenInput({
         onChange={onChange}
         label={t(I18nKey.AZURE_DEVOPS$TOKEN_LABEL)}
         type="password"
-        className="w-[680px]"
+        className="w-full max-w-[680px]"
         placeholder={isAzureDevOpsTokenSet ? "<hidden>" : ""}
         startContent={
           isAzureDevOpsTokenSet && (
             <KeyStatusIcon
-              testId="ado-set-token-indicator"
+              testId="azure-devops-set-token-indicator"
               isSet={isAzureDevOpsTokenSet}
             />
           )
@@ -47,13 +47,13 @@ export function AzureDevOpsTokenInput({
         testId="azure-devops-host-input"
         label={t(I18nKey.AZURE_DEVOPS$HOST_LABEL)}
         type="text"
-        className="w-[680px]"
-        placeholder="https://dev.azure.com/{your-org-name}"
+        className="w-full max-w-[680px]"
+        placeholder={t(I18nKey.AZURE_DEVOPS$HOST_PLACEHOLDER)}
         defaultValue={azureDevOpsHostSet || undefined}
         startContent={
           azureDevOpsHostSet &&
           azureDevOpsHostSet.trim() !== "" && (
-            <KeyStatusIcon testId="ado-set-host-indicator" isSet />
+            <KeyStatusIcon testId="azure-devops-set-host-indicator" isSet />
           )
         }
       />
