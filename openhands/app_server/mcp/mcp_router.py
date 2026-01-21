@@ -40,10 +40,10 @@ from openhands.app_server.user_auth import (
 )
 from openhands.app_server.utils.logger import openhands_logger as logger
 
-mcp_server = FastMCP('mcp', mask_error_details=True)
+mcp_server = FastMCP("mcp", mask_error_details=True)
 
-HOST = f'https://{os.getenv("WEB_HOST", "app.all-hands.dev").strip()}'
-CONVERSATION_URL = HOST + '/conversations/{}'
+HOST = f"https://{os.getenv('WEB_HOST', 'app.all-hands.dev').strip()}"
+CONVERSATION_URL = HOST + "/conversations/{}"
 
 
 def init_tavily_proxy() -> None:
@@ -56,23 +56,23 @@ def init_tavily_proxy() -> None:
     tavily_api_key = config.tavily_api_key
 
     if not tavily_api_key:
-        logger.info('Tavily API key not configured, skipping Tavily MCP proxy')
+        logger.info("Tavily API key not configured, skipping Tavily MCP proxy")
         return
 
     try:
         # Create a client that connects to Tavily's HTTP MCP endpoint
         proxy_client = Client(
             transport=StreamableHttpTransport(
-                url=f'https://mcp.tavily.com/mcp/?tavilyApiKey={tavily_api_key}'
+                url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={tavily_api_key}"
             )
         )
         proxy_server = create_proxy(proxy_client)
 
         # Mount under 'tavily' namespace so tools are accessible as tavily_*
-        mcp_server.mount(namespace='tavily', server=proxy_server)
-        logger.info('Tavily MCP proxy initialized successfully')
+        mcp_server.mount(namespace="tavily", server=proxy_server)
+        logger.info("Tavily MCP proxy initialized successfully")
     except Exception as e:
-        logger.error(f'Failed to initialize Tavily MCP proxy: {e}')
+        logger.error(f"Failed to initialize Tavily MCP proxy: {e}")
 
 
 async def get_conversation_link(
@@ -89,9 +89,9 @@ async def get_conversation_link(
     username = user.login
     conversation_url = CONVERSATION_URL.format(conversation_id)
     conversation_link = (
-        f'@{username} can click here to [continue refining the PR]({conversation_url})'
+        f"@{username} can click here to [continue refining the PR]({conversation_url})"
     )
-    body += f'\n\n{conversation_link}'
+    body += f"\n\n{conversation_link}"
     return body
 
 
@@ -110,11 +110,11 @@ async def save_pr_metadata(
             )
         )
         if not app_conversation_info:
-            raise ToolError(f'No such conversation {conversation_id}')
+            raise ToolError(f"No such conversation {conversation_id}")
 
-        pull_pattern = r'pull/(\d+)'
-        merge_request_pattern = r'merge_requests/(\d+)'
-        pull_requests_pattern = r'pull-requests/(\d+)'
+        pull_pattern = r"pull/(\d+)"
+        merge_request_pattern = r"merge_requests/(\d+)"
+        pull_requests_pattern = r"pull-requests/(\d+)"
 
         # Check if the tool_result contains the PR number
         pr_number = None
@@ -131,12 +131,12 @@ async def save_pr_metadata(
 
         if pr_number:
             logger.info(
-                f'Saving PR number: {pr_number} for conversation {conversation_id}'
+                f"Saving PR number: {pr_number} for conversation {conversation_id}"
             )
             app_conversation_info.pr_number.append(pr_number)
         else:
             logger.warning(
-                f'Failed to extract PR number for conversation {conversation_id}'
+                f"Failed to extract PR number for conversation {conversation_id}"
             )
 
         await app_conversation_info_service.save_app_conversation_info(
@@ -147,26 +147,26 @@ async def save_pr_metadata(
 @mcp_server.tool()
 async def create_pr(
     repo_name: Annotated[
-        str, Field(description='GitHub repository ({{owner}}/{{repo}})')
+        str, Field(description="GitHub repository ({{owner}}/{{repo}})")
     ],
-    source_branch: Annotated[str, Field(description='Source branch on repo')],
-    target_branch: Annotated[str, Field(description='Target branch on repo')],
-    title: Annotated[str, Field(description='PR Title')],
-    body: Annotated[str | None, Field(description='PR body')],
-    draft: Annotated[bool, Field(description='Whether PR opened is a draft')] = True,
+    source_branch: Annotated[str, Field(description="Source branch on repo")],
+    target_branch: Annotated[str, Field(description="Target branch on repo")],
+    title: Annotated[str, Field(description="PR Title")],
+    body: Annotated[str | None, Field(description="PR body")],
+    draft: Annotated[bool, Field(description="Whether PR opened is a draft")] = True,
     labels: Annotated[
         list[str] | None,
         Field(
-            description='Optional labels to apply to the PR. If labels are provided, they must be selected from the repository’s existing labels. Do not invent new ones. If the repository’s labels are not known, fetch them first.'
+            description="Optional labels to apply to the PR. If labels are provided, they must be selected from the repository’s existing labels. Do not invent new ones. If the repository’s labels are not known, fetch them first."
         ),
     ] = None,
 ) -> str:
     """Open a PR in GitHub"""
-    logger.info('Calling OpenHands MCP create_pr')
+    logger.info("Calling OpenHands MCP create_pr")
 
     request = get_http_request()
     headers = request.headers
-    conversation_id = headers.get('X-OpenHands-ServerConversation-ID', None)
+    conversation_id = headers.get("X-OpenHands-ServerConversation-ID", None)
 
     provider_tokens = await get_provider_tokens(request)
     access_token = await get_access_token(request)
@@ -187,9 +187,9 @@ async def create_pr(
     )
 
     try:
-        body = await get_conversation_link(github_service, conversation_id, body or '')
+        body = await get_conversation_link(github_service, conversation_id, body or "")
     except Exception as e:
-        logger.warning(f'Failed to append conversation link: {e}')
+        logger.warning(f"Failed to append conversation link: {e}")
 
     try:
         response = await github_service.create_pr(
@@ -206,7 +206,7 @@ async def create_pr(
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
-        error = f'Error creating pull request: {e}'
+        error = f"Error creating pull request: {e}"
         raise ToolError(str(error))
 
     return response
@@ -216,30 +216,30 @@ async def create_pr(
 async def create_mr(
     id: Annotated[
         int | str,
-        Field(description='GitLab repository (ID or URL-encoded path of the project)'),
+        Field(description="GitLab repository (ID or URL-encoded path of the project)"),
     ],
-    source_branch: Annotated[str, Field(description='Source branch on repo')],
-    target_branch: Annotated[str, Field(description='Target branch on repo')],
+    source_branch: Annotated[str, Field(description="Source branch on repo")],
+    target_branch: Annotated[str, Field(description="Target branch on repo")],
     title: Annotated[
         str,
         Field(
-            description='MR Title. Start title with `DRAFT:` or `WIP:` if applicable.'
+            description="MR Title. Start title with `DRAFT:` or `WIP:` if applicable."
         ),
     ],
-    description: Annotated[str | None, Field(description='MR description')],
+    description: Annotated[str | None, Field(description="MR description")],
     labels: Annotated[
         list[str] | None,
         Field(
-            description='Optional labels to apply to the MR. If labels are provided, they must be selected from the repository’s existing labels. Do not invent new ones. If the repository’s labels are not known, fetch them first.'
+            description="Optional labels to apply to the MR. If labels are provided, they must be selected from the repository’s existing labels. Do not invent new ones. If the repository’s labels are not known, fetch them first."
         ),
     ] = None,
 ) -> str:
     """Open a MR in GitLab"""
-    logger.info('Calling OpenHands MCP create_mr')
+    logger.info("Calling OpenHands MCP create_mr")
 
     request = get_http_request()
     headers = request.headers
-    conversation_id = headers.get('X-OpenHands-ServerConversation-ID', None)
+    conversation_id = headers.get("X-OpenHands-ServerConversation-ID", None)
 
     provider_tokens = await get_provider_tokens(request)
     access_token = await get_access_token(request)
@@ -261,10 +261,10 @@ async def create_mr(
 
     try:
         description = await get_conversation_link(
-            gitlab_service, conversation_id, description or ''
+            gitlab_service, conversation_id, description or ""
         )
     except Exception as e:
-        logger.warning(f'Failed to append conversation link: {e}')
+        logger.warning(f"Failed to append conversation link: {e}")
 
     try:
         response = await gitlab_service.create_mr(
@@ -280,7 +280,7 @@ async def create_mr(
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
-        error = f'Error creating merge request: {e}'
+        error = f"Error creating merge request: {e}"
         raise ToolError(str(error))
 
     return response
@@ -289,24 +289,24 @@ async def create_mr(
 @mcp_server.tool()
 async def create_bitbucket_pr(
     repo_name: Annotated[
-        str, Field(description='Bitbucket repository (workspace/repo_slug)')
+        str, Field(description="Bitbucket repository (workspace/repo_slug)")
     ],
-    source_branch: Annotated[str, Field(description='Source branch on repo')],
-    target_branch: Annotated[str, Field(description='Target branch on repo')],
+    source_branch: Annotated[str, Field(description="Source branch on repo")],
+    target_branch: Annotated[str, Field(description="Target branch on repo")],
     title: Annotated[
         str,
         Field(
-            description='PR Title. Start title with `DRAFT:` or `WIP:` if applicable.'
+            description="PR Title. Start title with `DRAFT:` or `WIP:` if applicable."
         ),
     ],
-    description: Annotated[str | None, Field(description='PR description')],
+    description: Annotated[str | None, Field(description="PR description")],
 ) -> str:
     """Open a PR in Bitbucket"""
-    logger.info('Calling OpenHands MCP create_bitbucket_pr')
+    logger.info("Calling OpenHands MCP create_bitbucket_pr")
 
     request = get_http_request()
     headers = request.headers
-    conversation_id = headers.get('X-OpenHands-ServerConversation-ID', None)
+    conversation_id = headers.get("X-OpenHands-ServerConversation-ID", None)
 
     provider_tokens = await get_provider_tokens(request)
     access_token = await get_access_token(request)
@@ -328,10 +328,10 @@ async def create_bitbucket_pr(
 
     try:
         description = await get_conversation_link(
-            bitbucket_service, conversation_id, description or ''
+            bitbucket_service, conversation_id, description or ""
         )
     except Exception as e:
-        logger.warning(f'Failed to append conversation link: {e}')
+        logger.warning(f"Failed to append conversation link: {e}")
 
     try:
         response = await bitbucket_service.create_pr(
@@ -346,7 +346,7 @@ async def create_bitbucket_pr(
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
-        error = f'Error creating pull request: {e}'
+        error = f"Error creating pull request: {e}"
         logger.error(error)
         raise ToolError(str(error))
 
@@ -356,24 +356,24 @@ async def create_bitbucket_pr(
 @mcp_server.tool()
 async def create_bitbucket_data_center_pr(
     repo_name: Annotated[
-        str, Field(description='Bitbucket Data Center repository (PROJECT/repo_slug)')
+        str, Field(description="Bitbucket Data Center repository (PROJECT/repo_slug)")
     ],
-    source_branch: Annotated[str, Field(description='Source branch on repo')],
-    target_branch: Annotated[str, Field(description='Target branch on repo')],
+    source_branch: Annotated[str, Field(description="Source branch on repo")],
+    target_branch: Annotated[str, Field(description="Target branch on repo")],
     title: Annotated[
         str,
         Field(
-            description='PR Title. Start title with `DRAFT:` or `WIP:` if applicable.'
+            description="PR Title. Start title with `DRAFT:` or `WIP:` if applicable."
         ),
     ],
-    description: Annotated[str | None, Field(description='PR description')],
+    description: Annotated[str | None, Field(description="PR description")],
 ) -> str:
     """Open a PR in Bitbucket Data Center"""
-    logger.info('Calling OpenHands MCP create_bitbucket_data_center_pr')
+    logger.info("Calling OpenHands MCP create_bitbucket_data_center_pr")
 
     request = get_http_request()
     headers = request.headers
-    conversation_id = headers.get('X-OpenHands-ServerConversation-ID', None)
+    conversation_id = headers.get("X-OpenHands-ServerConversation-ID", None)
 
     provider_tokens = await get_provider_tokens(request)
     access_token = await get_access_token(request)
@@ -395,10 +395,10 @@ async def create_bitbucket_data_center_pr(
 
     try:
         description = await get_conversation_link(
-            bitbucket_dc_service, conversation_id, description or ''
+            bitbucket_dc_service, conversation_id, description or ""
         )
     except Exception as e:
-        logger.warning(f'Failed to append conversation link: {e}')
+        logger.warning(f"Failed to append conversation link: {e}")
 
     try:
         response = await bitbucket_dc_service.create_pr(
@@ -413,7 +413,7 @@ async def create_bitbucket_data_center_pr(
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
-        error = f'Error creating pull request: {e}'
+        error = f"Error creating pull request: {e}"
         logger.error(error)
         raise ToolError(str(error))
 
@@ -423,24 +423,30 @@ async def create_bitbucket_data_center_pr(
 @mcp_server.tool()
 async def create_azure_devops_pr(
     repo_name: Annotated[
-        str, Field(description='Azure DevOps repository (organization/project/repo)')
+        str, Field(description="Azure DevOps repository (organization/project/repo)")
     ],
-    source_branch: Annotated[str, Field(description='Source branch on repo')],
-    target_branch: Annotated[str, Field(description='Target branch on repo')],
+    source_branch: Annotated[str, Field(description="Source branch on repo")],
+    target_branch: Annotated[str, Field(description="Target branch on repo")],
     title: Annotated[
         str,
         Field(
-            description='PR Title. Start title with `DRAFT:` or `WIP:` if applicable.'
+            description="PR Title. Start title with `DRAFT:` or `WIP:` if applicable."
         ),
     ],
-    description: Annotated[str | None, Field(description='PR description')],
+    description: Annotated[str | None, Field(description="PR description")],
+    work_item_ids: Annotated[
+        list[int] | None,
+        Field(
+            description="Optional list of work item IDs to link to the PR. This will show the PR in the Development section of the work items."
+        ),
+    ] = None,
 ) -> str:
     """Open a PR in Azure DevOps"""
-    logger.info('Calling OpenHands MCP create_azure_devops_pr')
+    logger.info("Calling OpenHands MCP create_azure_devops_pr")
 
     request = get_http_request()
     headers = request.headers
-    conversation_id = headers.get('X-OpenHands-ServerConversation-ID', None)
+    conversation_id = headers.get("X-OpenHands-ServerConversation-ID", None)
 
     provider_tokens = await get_provider_tokens(request)
     access_token = await get_access_token(request)
@@ -462,10 +468,10 @@ async def create_azure_devops_pr(
 
     try:
         description = await get_conversation_link(
-            azure_devops_service, conversation_id, description or ''
+            azure_devops_service, conversation_id, description or ""
         )
     except Exception as e:
-        logger.warning(f'Failed to append conversation link: {e}')
+        logger.warning(f"Failed to append conversation link: {e}")
 
     try:
         response = await azure_devops_service.create_pr(
@@ -474,13 +480,14 @@ async def create_azure_devops_pr(
             target_branch=target_branch,
             title=title,
             body=description,
+            work_item_ids=work_item_ids,
         )
 
         if conversation_id and user_id:
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
-        error = f'Error creating pull request: {e}'
+        error = f"Error creating pull request: {e}"
         logger.error(error)
         raise ToolError(str(error))
 

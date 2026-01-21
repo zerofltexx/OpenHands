@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import mistune
+
 from openhands.app_server.integrations.azure_devops.service.base import (
     AzureDevOpsMixinBase,
 )
@@ -20,7 +22,7 @@ class AzureDevOpsWorkItemsMixin(AzureDevOpsMixinBase):
         """Truncate comment to max length."""
         if len(comment) <= max_length:
             return comment
-        return comment[:max_length] + '...'
+        return comment[:max_length] + "..."
 
     async def add_work_item_comment(
         self, repository: str, work_item_id: int, comment_text: str
@@ -46,17 +48,48 @@ class AzureDevOpsWorkItemsMixin(AzureDevOpsMixinBase):
         org_enc = self._encode_url_component(org)
         project_enc = self._encode_url_component(project)
 
-        url = f'{self.base_url}/{org_enc}/{project_enc}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4'
+        # Azure DevOps work item comments require HTML
+        comment_html = mistune.html(comment_text)
+
+        url = f"{self.base_url}/{org_enc}/{project_enc}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4"
 
         payload = {
-            'text': comment_text,
+            "text": comment_html,
         }
 
         response, _ = await self._make_request(
             url=url, params=payload, method=RequestMethod.POST
         )
 
-        logger.info(f'Added comment to work item {work_item_id} in project {project}')
+        logger.info(f"Added comment to work item {work_item_id} in project {project}")
+        return response
+
+    async def get_work_item(self, repository: str, work_item_id: int) -> dict:
+        """Get full work item details including all fields.
+
+        API Reference: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-item
+
+        Args:
+            repository: Repository name in format "organization/project/repo" (project extracted)
+            work_item_id: The work item ID
+
+        Returns:
+            API response with complete work item information including all fields
+
+        Raises:
+            HTTPException: If the API request fails
+        """
+        org, project, _ = self._parse_repository(repository)
+
+        # URL-encode components to handle spaces and special characters
+        org_enc = self._encode_url_component(org)
+        project_enc = self._encode_url_component(project)
+
+        url = f"{self.base_url}/{org_enc}/{project_enc}/_apis/wit/workItems/{work_item_id}?api-version=7.1"
+
+        response, _ = await self._make_request(url)
+
+        logger.info(f"Fetched work item {work_item_id} from project {project}")
         return response
 
     async def get_work_item_comments(
@@ -80,38 +113,38 @@ class AzureDevOpsWorkItemsMixin(AzureDevOpsMixinBase):
         org_enc = self._encode_url_component(org)
         project_enc = self._encode_url_component(project)
 
-        url = f'{self.base_url}/{org_enc}/{project_enc}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4'
+        url = f"{self.base_url}/{org_enc}/{project_enc}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4"
 
         response, _ = await self._make_request(url)
 
-        comments_data = response.get('comments', [])
+        comments_data = response.get("comments", [])
         all_comments: list[Comment] = []
 
         for comment_data in comments_data:
             # Extract author information
-            author_info = comment_data.get('createdBy', {})
-            author = author_info.get('displayName', 'unknown')
+            author_info = comment_data.get("createdBy", {})
+            author = author_info.get("displayName", "unknown")
 
             # Parse dates
             created_at = (
                 datetime.fromisoformat(
-                    comment_data.get('createdDate', '').replace('Z', '+00:00')
+                    comment_data.get("createdDate", "").replace("Z", "+00:00")
                 )
-                if comment_data.get('createdDate')
+                if comment_data.get("createdDate")
                 else datetime.fromtimestamp(0)
             )
 
             modified_at = (
                 datetime.fromisoformat(
-                    comment_data.get('modifiedDate', '').replace('Z', '+00:00')
+                    comment_data.get("modifiedDate", "").replace("Z", "+00:00")
                 )
-                if comment_data.get('modifiedDate')
+                if comment_data.get("modifiedDate")
                 else created_at
             )
 
             comment = Comment(
-                id=str(comment_data.get('id', 0)),
-                body=self._truncate_comment(comment_data.get('text', '')),
+                id=str(comment_data.get("id", 0)),
+                body=self._truncate_comment(comment_data.get("text", "")),
                 author=author,
                 created_at=created_at,
                 updated_at=modified_at,
@@ -123,9 +156,3 @@ class AzureDevOpsWorkItemsMixin(AzureDevOpsMixinBase):
         # Sort by creation date and limit
         all_comments.sort(key=lambda c: c.created_at)
         return all_comments[:max_comments]
-
-    async def add_work_item_reaction(
-        self, repository: str, work_item_id: int, reaction_type: str = ':thumbsup:'
-    ) -> dict:
-        comment_text = f'{reaction_type} OpenHands is processing this work item...'
-        return await self.add_work_item_comment(repository, work_item_id, comment_text)

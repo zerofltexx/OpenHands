@@ -19,6 +19,9 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import SecretStr
+from server.auth.azure_devops_enrichment import (
+    schedule_azure_devops_enrichment,
+)
 from server.auth.constants import (
     KEYCLOAK_CLIENT_ID,
     KEYCLOAK_REALM_NAME,
@@ -611,6 +614,22 @@ async def keycloak_callback(
     # Use Keycloak access token (first-time users lack offline token at this stage)
     # Normally, offline token is used to fetch GitLab token via user_id
     schedule_gitlab_repo_sync(user_id, SecretStr(keycloak_access_token))
+
+    # Enrich user profile with Azure DevOps User ID for webhook mapping (Azure DevOps users only)
+    # This resolves the user's email to their Azure DevOps ID via Identities API
+    # Use the processed idp value (which has the :oidc/:saml suffix stripped)
+    if idp == ProviderType.AZURE_DEVOPS.value:
+        email = user_info.get('email')
+        if email:
+            schedule_azure_devops_enrichment(user_id, email)
+            # NOTE: Webhook authentication now uses API keys (Authorization: Bearer header)
+            # Users should generate an API key from Settings -> API Keys and configure
+            # it in their Azure DevOps Service Hook with Authorization header
+
+    # Note: Azure DevOps webhooks require manual setup by Project Administrators
+    # Unlike GitLab, Azure DevOps OAuth scopes for Service Hooks are "no longer public"
+    # and cannot be requested in OAuth apps. Webhooks must be created manually in Azure DevOps UI.
+
     return response
 
 
@@ -646,6 +665,11 @@ async def keycloak_offline_callback(code: str, state: str, request: Request):
 
     user = await UserStore.get_user_by_id(user_info.sub)
     has_accepted_tos = user is not None and user.accepted_tos is not None
+
+    # Enrich user profile with Azure DevOps ID (async background task)
+    # This allows webhook user mapping when Azure DevOps ID != Azure AD Object ID
+    if user_info.email:
+        schedule_azure_devops_enrichment(user_id=user_info.sub, email=user_info.email)
 
     redirect_url, _, _ = _extract_oauth_state(state)
     default_url = redirect_url if redirect_url else web_url
